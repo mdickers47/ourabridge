@@ -45,9 +45,16 @@ func storeObservations() {
 			obs.Value,
 			obs.Timestamp.Unix())
 		log.Print(line)
-		io.WriteString(local, line)
+		_, err = io.WriteString(local, line)
+		if err != nil {
+			// if we are unable to record the observations, it is best to die
+			log.Fatalf("can't write to log file: %v", err)
+		}
 		if graphite != nil {
-			io.WriteString(graphite, line)
+			_, err = io.WriteString(graphite, line)
+			if err != nil {
+				log.Fatalf("can't write to graphite server: %v", err)
+			}
 		}
 	}
 }
