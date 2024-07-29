@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -37,17 +36,9 @@ type clientSecrets struct {
 	ClientSecret string
 }
 
-type userToken struct {
-	Name     string
-	PI       personalInfo
-	Token    oauth2.Token
-	LastPoll time.Time
-}
-
 var oauthConfig *oauth2.Config
-var userTokens map[string]userToken
-var userTokensLock sync.Mutex
 var dailyChan chan userToken
+var eventChan chan eventNotification
 
 func parseJsonOrDie(f *string, dest any) {
 	bytes, err := os.ReadFile(*f)
@@ -105,13 +96,12 @@ func validateUsername(n string, claim bool) string {
 	} else if strings.Index(n, ".") >= 0 {
 		return "username cannot contain ."
 	}
-	userTokensLock.Lock()
-	defer userTokensLock.Unlock()
-	if _, exists := userTokens[n]; exists == true {
+	if UserTokens.FindByName(n) != nil {
 		return "username is taken"
 	}
 	if claim {
-		userTokens[n] = userToken{Name: n}
+		// it's Replacing nothing but that's fine
+		UserTokens.Replace(n, userToken{Name: n})
 	}
 	return ""
 }
@@ -148,10 +138,7 @@ func fetchDailiesOnDemand() {
 		err = doOuraDocRequest(oauthConfig, &ut, "heartrate", &hr)
 		processResponse(err, hr.Data, ut)
 		ut.LastPoll = time.Now()
-		userTokensLock.Lock()
-		userTokens[ut.Name] = ut
-		dumpJsonOrDie(UsersFile, userTokens)
-		userTokensLock.Unlock()
+		UserTokens.Replace(ut.Name, ut)
 	}
 }
 
@@ -159,21 +146,21 @@ func pollDailies(die chan bool) {
 	for {
 		select {
 		case <-time.After(time.Minute * 60):
-			// take a copy of UserTokens
-			userTokensLock.Lock()
-			uts := make([]userToken, 0, len(userTokens))
-			for _, value := range userTokens {
-				uts = append(uts, value)
-			}
-			userTokensLock.Unlock()
-			// chuck them all into the daily-fetch hopper
-			for _, ut := range uts {
+			// take a snapshot of UserTokens, and chuck them all into the
+			// daily-fetch hopper
+			for _, ut := range UserTokens.CopyUserTokens() {
 				dailyChan <- ut
 			}
 		case <-die:
 			return
 		}
 	}
+}
+
+func processWebhookEvents(incoming chan eventNotification) {
+	//for event := range incoming {
+		// WIP
+	//}
 }
 
 func main() {
@@ -184,11 +171,11 @@ func main() {
 	go fetchDailiesOnDemand()
 	killPollerChan := make(chan bool)
 	go pollDailies(killPollerChan)
+	eventChan := make(chan eventNotification)
+	go processWebhookEvents(eventChan)
 
 	var cs clientSecrets
 	parseJsonOrDie(ClientFile, &cs)
-	parseJsonOrDie(UsersFile, &userTokens)
-
 	oauthConfig = &oauth2.Config{
 		RedirectURL:  fmt.Sprintf("%v%v", *BaseUrl, "/code"),
 		ClientID:     cs.ClientID,
@@ -201,8 +188,10 @@ func main() {
 		},
 	}
 
+	parseJsonOrDie(UsersFile, &UserTokens.Tokens)
+
 	// refresh the daily documents at startup
-	for _, ut := range userTokens {
+	for _, ut := range UserTokens.Tokens {
 		dailyChan <- ut
 	}
 	
@@ -225,7 +214,7 @@ func main() {
 	mux.HandleFunc("/newlogin", handleLogin)
 	mux.HandleFunc("/code", handleAuthCode)
 	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s %s\n", r.RemoteAddr, r.Method, r.URL)
+		log.Printf("HTTP %s %s %s\n", r.RemoteAddr, r.Method, r.URL)
 		mux.ServeHTTP(w, r)
 	})
 	log.Println(http.ListenAndServe(*ServerAddr, logger))

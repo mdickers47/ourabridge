@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"golang.org/x/oauth2"
 	"io"
@@ -20,7 +21,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "<style>tr:nth-of-type(odd) { background-color: gray; }</style>\n")
 	io.WriteString(w, "<body>\n<h2>Current tokens</h2>\n")
 	io.WriteString(w, "<table><tr><th>username</th><th>email</th><th>expiration</th><th>last poll</th></tr>\n")
-	for _, ut := range userTokens {
+	for _, ut := range UserTokens.Tokens {
 		io.WriteString(w,
 			fmt.Sprintf("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",
 				ut.Name,
@@ -89,9 +90,9 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	log.Printf("completed code-token exchange for state=%s", cookie.Value)
 
 	// populate personal_info, which also tests that the new token works
-	ut := userTokens[un]
+	ut := UserTokens.FindByName(un)
 	ut.Token = *tok
-	err = doOuraDocRequest(oauthConfig, &ut, "personal_info", &ut.PI)
+	err = doOuraDocRequest(oauthConfig, ut, "personal_info", &ut.PI)
 	if err != nil {
 		sendError(w, fmt.Sprintf("failed to fetch personal_info: %v", err))
 		return
@@ -101,33 +102,41 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	// return a copy of the struct value.  modifying that copy does nothing
 	// to the copy in the map/array.  but you can modify the copy and then
 	// store it back in the map/array.
-	userTokensLock.Lock()
-	userTokens[un] = ut
-	dumpJsonOrDie(UsersFile, userTokens)
-	userTokensLock.Unlock()
-	log.Printf("new token expires %v", userTokens[un].Token.Expiry)
+	UserTokens.Replace(un, *ut)
+	log.Printf("new token expires %v", ut.Token.Expiry)
 	log.Printf("fetched personal_info for %s: ID %s Email %s",
-		userTokens[un].Name, userTokens[un].PI.ID, userTokens[un].PI.Email)
+		ut.Name, ut.PI.ID, ut.PI.Email)
 	http.Redirect(w, r, "home", http.StatusTemporaryRedirect)
-	dailyChan <- userTokens[un]
+	dailyChan <- *ut
 }
 
-/* WIP
-
 func handleEvent(w http.ResponseWriter, r *http.Request) {
-
 	event := eventNotification{}
 	buf, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("can't read request body: %s", err)
+		msg := fmt.Sprintf("can't read request body: %s", err)
+		log.Printf(msg)
+		w.WriteHeader(http.StatusBadRequest)
+		writeLogErr(w, msg)
 		return
 	}
 	err = json.Unmarshal(buf, &event)
 	if err != nil {
-		log.Printf("can't parse request body: %s", err)
+		msg := fmt.Sprintf("can't parse request body: %s", err)
+		log.Printf(msg)
 		log.Printf("body was: %s", buf)
+		w.WriteHeader(http.StatusBadRequest)
+		writeLogErr(w, msg)
 		return
 	}
-
+	w.WriteHeader(http.StatusOK)
+	writeLogErr(w, "Thanks Chief!")
+	eventChan <- event
 }
-*/
+
+func writeLogErr(w io.Writer, s string) {
+	_, err := io.WriteString(w, s)
+	if err != nil {
+		log.Printf("write error: %v", err)
+	}
+}
