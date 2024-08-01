@@ -15,27 +15,53 @@ import (
 )
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
+
+	// non-goal: writing a whole new package for html generation
+	thing := func(tag string, val string) {
+		_, err := io.WriteString(w, fmt.Sprintf("<%s>%s</%s>", tag, val, tag))
+		if err != nil {
+			log.Printf("can't write to http response: %s", err)
+		}
+	}
+
 	w.Header().Add("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, "<html><head><title>Oura Timeseries Bridge</title></head>")
 	io.WriteString(w, "<style>tr:nth-of-type(odd) { background-color: gray; }</style>\n")
-	io.WriteString(w, "<body>\n<h2>Current tokens</h2>\n")
-	io.WriteString(w, "<table><tr><th>username</th><th>email</th><th>expiration</th><th>last poll</th></tr>\n")
-	for _, ut := range UserTokens.Tokens {
-		io.WriteString(w,
-			fmt.Sprintf("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",
-				ut.Name,
-				censorEmail(ut.PI.Email),
-				ut.Token.Expiry.Format(time.RFC3339),
-				ut.LastPoll.Format(time.RFC3339)))
+	io.WriteString(w, "<body>\n")
+	thing("h2", "Current tokens")
+	io.WriteString(w, "<table><tr><th>username</th><th>email</th><th colspan=\"2\">expiration</th><th colspan=\"2\">last poll</th></tr>\n")
+
+	dur := func(t time.Time) string {
+		return fmt.Sprintf("%s",
+			time.Now().Round(time.Minute).Sub(t).Round(time.Minute))
+		// put that in your v8 and smoke it
 	}
-	io.WriteString(w, "</table>\n<h2>Go Oauth yourself</h2>\n")
+
+	for _, ut := range UserTokens.Tokens {
+		io.WriteString(w, "<tr>")
+		thing("td", ut.Name)
+		thing("td", censorEmail(ut.PI.Email))
+		thing("td", ut.OauthToken.Expiry.Format(time.RFC3339))
+		thing("td", dur(ut.OauthToken.Expiry))
+		thing("td", ut.LastPoll.Format(time.RFC3339))
+		thing("td", dur(ut.LastPoll))
+		io.WriteString(w, "</tr>")
+	}
+	io.WriteString(w, "</table>")
+	thing("p", "Current time: "+time.Now().Format(time.RFC3339))
+	thing("h2", "Go Oauth yourself")
 	io.WriteString(w, "<form action=\"/newlogin\">"+
 		"<label for=\"username\">Choose a username</label>"+
 		"<br/><input type=\"text\" name=\"username\">"+
 		"<br/><input type=\"submit\" value=\"Go\"></form>"+
 		"</body></html>\n")
+}
 
+func randomString() string {
+	nonce := make([]byte, 18)
+	rand.Read(nonce)
+	return base64.URLEncoding.EncodeToString(nonce)
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -47,10 +73,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		sendError(w, msg)
 		return
 	}
-	nonce := make([]byte, 18)
-	rand.Read(nonce)
-	state := (r.FormValue("username") + ":" +
-		base64.URLEncoding.EncodeToString(nonce))
+	state := (r.FormValue("username") + ":" + randomString())
 	http.SetCookie(w, &http.Cookie{
 		Name:    "oauthstate",
 		Value:   state,
@@ -91,8 +114,10 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 
 	// populate personal_info, which also tests that the new token works
 	ut := UserTokens.FindByName(un)
-	ut.Token = *tok
-	err = doOuraDocRequest(oauthConfig, ut, "personal_info", &ut.PI)
+	ut.OauthToken = *tok
+	log.Printf("ut going in is %v", ut)
+	log.Printf("the OauthToken of ut going in is %v", ut.OauthToken)
+	err = doOuraDocRequest(ut, "personal_info", &ut.PI)
 	if err != nil {
 		sendError(w, fmt.Sprintf("failed to fetch personal_info: %v", err))
 		return
@@ -103,7 +128,7 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	// to the copy in the map/array.  but you can modify the copy and then
 	// store it back in the map/array.
 	UserTokens.Replace(un, *ut)
-	log.Printf("new token expires %v", ut.Token.Expiry)
+	log.Printf("new token expires %v", ut.OauthToken.Expiry)
 	log.Printf("fetched personal_info for %s: ID %s Email %s",
 		ut.Name, ut.PI.ID, ut.PI.Email)
 	http.Redirect(w, r, "home", http.StatusTemporaryRedirect)
@@ -111,27 +136,61 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleEvent(w http.ResponseWriter, r *http.Request) {
-	event := eventNotification{}
-	buf, err := io.ReadAll(r.Body)
-	if err != nil {
-		msg := fmt.Sprintf("can't read request body: %s", err)
-		log.Printf(msg)
+	switch r.Method {
+	case "GET":
+		// this is how they verify that you are listening at subscription
+		// time
+		log.Printf("received subscription verifier request: %s", r.URL.String())
+		if r.FormValue("verification_token") != SubscriptionToken {
+			log.Printf("subscription callback token: got %s, expected %s",
+				r.FormValue("verification_token"), SubscriptionToken)
+			//w.WriteHeader(http.StatusBadRequest)
+			//return
+		}
+		// our proof of worthiness is to take the string out of the query
+		// parameter, encode it in a json container, and send it back
+		buf, err := json.Marshal(struct{ Challenge string }{
+			Challenge: r.FormValue("challenge"),
+		})
+		if err != nil {
+			msg := fmt.Sprintf("failed to json-encode challenge: %v", err)
+			log.Println(msg)
+			w.WriteHeader(http.StatusBadRequest)
+			writeLogErr(w, msg)
+			return
+		}
+		log.Printf("returning challenge: %s", buf)
+		w.WriteHeader(http.StatusOK)
+		_, err = w.Write(buf)
+		if err != nil {
+			log.Printf("can't write to output stream: %v", err)
+		}
+	case "POST":
+		event := eventNotification{}
+		buf, err := io.ReadAll(r.Body)
+		if err != nil {
+			msg := fmt.Sprintf("can't read request body: %s", err)
+			log.Printf(msg)
+			w.WriteHeader(http.StatusBadRequest)
+			writeLogErr(w, msg)
+			return
+		}
+		err = json.Unmarshal(buf, &event)
+		if err != nil {
+			msg := fmt.Sprintf("can't parse request body: %s", err)
+			log.Printf(msg)
+			log.Printf("body was: %s", buf)
+			w.WriteHeader(http.StatusBadRequest)
+			writeLogErr(w, msg)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		writeLogErr(w, "Thanks Chief!")
+		eventChan <- event
+	default:
+		log.Printf("weird HTTP method: %s", r.Method)
 		w.WriteHeader(http.StatusBadRequest)
-		writeLogErr(w, msg)
-		return
 	}
-	err = json.Unmarshal(buf, &event)
-	if err != nil {
-		msg := fmt.Sprintf("can't parse request body: %s", err)
-		log.Printf(msg)
-		log.Printf("body was: %s", buf)
-		w.WriteHeader(http.StatusBadRequest)
-		writeLogErr(w, msg)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	writeLogErr(w, "Thanks Chief!")
-	eventChan <- event
 }
 
 func writeLogErr(w io.Writer, s string) {

@@ -111,31 +111,29 @@ func processResponse[T ouraDoc](err error, doclist []T, ut userToken) {
 		log.Println(err)
 	}
 	for _, doc := range doclist {
-		t := doc.GetTimestamp()
-		if t.Before(ut.LastPoll) {
-			log.Printf("ignoring stale %s: %s", doc.GetMetricPrefix(), t)
-		} else {
-			SendDoc(doc, ut.Name)
-		}
+		// I tried to use document timestamps to avoid saving duplicate
+		// observations, but it doesn't work without getting complicated,
+		// because documents arrive with back-dated timestamps.
+		SendDoc(doc, ut.Name)
 	}
 }
 
 func fetchDailiesOnDemand() {
 	for ut := range dailyChan {
 		dr := readinessResponse{}
-		err := doOuraDocRequest(oauthConfig, &ut, "daily_readiness", &dr)
+		err := doOuraDocRequest(&ut, "daily_readiness", &dr)
 		processResponse(err, dr.Data, ut)
-		da:= activityResponse{}
-		err = doOuraDocRequest(oauthConfig, &ut, "daily_activity", &da)
+		da := activityResponse{}
+		err = doOuraDocRequest(&ut, "daily_activity", &da)
 		processResponse(err, da.Data, ut)
 		ds := sleepResponse{}
-		err = doOuraDocRequest(oauthConfig, &ut, "daily_sleep", &ds)
+		err = doOuraDocRequest(&ut, "daily_sleep", &ds)
 		processResponse(err, ds.Data, ut)
 		dp := sleepPeriodResponse{}
-		err = doOuraDocRequest(oauthConfig, &ut, "sleep", &dp)
+		err = doOuraDocRequest(&ut, "sleep", &dp)
 		processResponse(err, dp.Data, ut)
 		hr := heartrateResponse{}
-		err = doOuraDocRequest(oauthConfig, &ut, "heartrate", &hr)
+		err = doOuraDocRequest(&ut, "heartrate", &hr)
 		processResponse(err, hr.Data, ut)
 		ut.LastPoll = time.Now()
 		UserTokens.Replace(ut.Name, ut)
@@ -158,13 +156,109 @@ func pollDailies(die chan bool) {
 }
 
 func processWebhookEvents(incoming chan eventNotification) {
-	//for event := range incoming {
-		// WIP
-	//}
+	for event := range incoming {
+		ut := UserTokens.FindById(event.User_id)
+		if ut == nil {
+			log.Printf("webhook notification for mystery user: %s", event.User_id)
+			continue
+		}
+		// the other possible Event_type is "delete" and there is nothing we
+		// can do with that.
+		if event.Event_type == "update" || event.Event_type == "create" {
+			switch event.Data_type {
+			case "daily_activity":
+				da := dailyActivity{}
+				err := getOuraDoc(ut, "daily_activity", event.Object_id, &da)
+				if err != nil {
+					SendDoc(da, ut.Name)
+				}
+			case "daily_readiness":
+				dr := dailyReadiness{}
+				err := getOuraDoc(ut, "daily_readiness", event.Object_id, &dr)
+				if err != nil {
+					SendDoc(dr, ut.Name)
+				}
+			case "daily_sleep":
+				ds := dailySleep{}
+				err := getOuraDoc(ut, "daily_sleep", event.Object_id, &ds)
+				if err != nil {
+					SendDoc(ds, ut.Name)
+				}
+			case "sleep":
+				sp := sleepPeriod{}
+				err := getOuraDocById(ut, "sleep", event.Object_id, &sp)
+				if err != nil {
+					SendDoc(sp, ut.Name)
+				}
+			default:
+				// unhandled types include:
+				// tag enhanced_tag workout session daily_spo2 sleep_time
+				// rest_mode_period ring_configuration daily_stress
+				// daily_cycle_phases
+				log.Printf("webhook notification for unhandled type: %s",
+					event.Data_type)
+			}
+		}
+	}
+}
+
+func renewSubscriptions() {
+	// run through all the userTokens and all the data types and create
+	// or renew any missing subscriptions.  we stop trying after 3
+	// failures because it appears that if you fail too much, you will
+	// piss off cloudfront on oura's side and get locked out.
+	var err error
+	err_count := 0
+	for _, ut := range UserTokens.Tokens {
+		for _, data_type := range []string{"daily_activity", "daily_readiness",
+			"daily_sleep", "sleep"} {
+			for _, event_type := range []string{"create", "update"} {
+				_, s := ut.GetSubscription(data_type, event_type)
+				if s == nil {
+					s, err = createOuraSubscription(&ut, event_type, data_type)
+					if err != nil {
+						log.Printf("can't create subscription %s/%s/%s: %v",
+							ut.Name, data_type, event_type, err)
+						if err_count += 1; err_count > 2 {
+							log.Printf("giving up on subscriptions")
+							return
+						}
+					} else {
+						ut.ReplaceSubscription(s)
+						log.Printf("subscribed to %s/%s/%s expiring %v",
+							ut.Name, data_type, event_type, s.Expiration_time)
+					}
+				} else {
+					// there is already a subscription, let's see if it is expiring
+					// soon
+					lifetime := s.Expiration_time.Sub(time.Now())
+					if lifetime < 2*time.Hour {
+						err = renewOuraSubscription(oauthConfig, &ut, s)
+						if err != nil {
+							log.Printf("can't renew subscription %s/%s/%s: %v",
+								ut.Name, data_type, event_type, err)
+							if err_count += 1; err_count > 2 {
+								log.Printf("giving up on subscriptions")
+								return
+							}
+						} else {
+							ut.ReplaceSubscription(s)
+							log.Printf("renewed %s/%s/%s until %v",
+								ut.Name, data_type, event_type, s.Expiration_time)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 func main() {
 	flag.Parse()
+	log.Println("=======> start")
+
+	// start a bunch of workers
+
 	observationChan = make(chan observation, 12)
 	go storeObservations()
 	dailyChan = make(chan userToken, 3)
@@ -173,6 +267,9 @@ func main() {
 	go pollDailies(killPollerChan)
 	eventChan := make(chan eventNotification)
 	go processWebhookEvents(eventChan)
+
+	// set up oauth, which means retrieving the client secrets and the
+	// cached user tokens.
 
 	var cs clientSecrets
 	parseJsonOrDie(ClientFile, &cs)
@@ -194,7 +291,9 @@ func main() {
 	for _, ut := range UserTokens.Tokens {
 		dailyChan <- ut
 	}
-	
+
+	// start subscriptions
+
 	/*
 		listen, err := tls.Listen("tcp", *ServerAddr, loadCertOrDie())
 		if err != nil {
@@ -213,12 +312,26 @@ func main() {
 	mux.HandleFunc("/home", handleHome)
 	mux.HandleFunc("/newlogin", handleLogin)
 	mux.HandleFunc("/code", handleAuthCode)
+	mux.HandleFunc("/event", handleEvent)
+
 	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("HTTP %s %s %s\n", r.RemoteAddr, r.Method, r.URL)
 		mux.ServeHTTP(w, r)
 	})
-	log.Println(http.ListenAndServe(*ServerAddr, logger))
+	bye := make(chan bool)
+	go func() {
+		err := http.ListenAndServe(*ServerAddr, logger)
+		log.Println(err)
+		bye <- true
+	}()
 
-	// we don't get here until the http server is shut down
+	log.Printf("http server is running on %s", *ServerAddr)
+
+	// start subscriptions -- note that we have to have ListenAndServe()
+	// going first, because of callbacks!
+	renewSubscriptions()
+
+	<-bye
 	killPollerChan <- true
+	log.Println("=======> See You Space Cowboy")
 }

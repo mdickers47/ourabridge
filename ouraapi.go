@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,9 +10,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"time"
 	"reflect"
 	"strings"
+	"time"
 )
 
 type hasTimestamp interface {
@@ -21,7 +21,7 @@ type hasTimestamp interface {
 
 type ouraDoc interface {
 	dailyReadiness | dailyActivity | dailySleep | sleepPeriod | heartrateInstant
-	GetTimestamp()    time.Time
+	GetTimestamp() time.Time
 	GetMetricPrefix() string
 }
 
@@ -35,15 +35,11 @@ type personalInfo struct {
 }
 
 type readinessResponse struct {
-  Data       []dailyReadiness
+	Data       []dailyReadiness
 	Next_token string
 }
 
-type readinessPeriod struct {
-}	
-
 type dailyReadiness struct {
-	readinessPeriod
 	ID                          string
 	Contributors                map[string]int
 	Score                       int
@@ -73,22 +69,22 @@ type dailyActivity struct {
 	Low_activity_time           int
 	Medium_activity_met_minutes int
 	Medium_activity_time        int
-	Met struct {
+	Met                         struct {
 		Interval  float32
 		Items     []float32
 		Timestamp time.Time
 	}
-	Meters_to_target            int
-	Non_wear_time               int
-	Resting_time                int
-	Sedentary_met_minutes       int
-	Sedentary_time              int
-	Steps                       int
-	Target_calories             int
-	Target_meters               int
-	Total_calories              int
-	Day                         string
-	Timestamp                   time.Time
+	Meters_to_target      int
+	Non_wear_time         int
+	Resting_time          int
+	Sedentary_met_minutes int
+	Sedentary_time        int
+	Steps                 int
+	Target_calories       int
+	Target_meters         int
+	Total_calories        int
+	Day                   string
+	Timestamp             time.Time
 }
 
 type resilienceResponse struct {
@@ -114,7 +110,7 @@ type dailySleep struct {
 	Day          string
 	Score        int
 	Timestamp    time.Time
-}	
+}
 
 type sleepPeriodResponse struct {
 	Data       []sleepPeriod
@@ -122,17 +118,17 @@ type sleepPeriodResponse struct {
 }
 
 type sleepPeriod struct {
-	ID                      string
-	Average_breath          float32
-	Average_heart_rate      float32
-	Average_hrv             int
-	Awake_time              int
-	Bedtime_end             time.Time
-	Bedtime_start           time.Time
-	Day                     string
-	Deep_sleep_duration     int
-	Efficiency              int
-	Heart_rate struct {
+	ID                  string
+	Average_breath      float32
+	Average_heart_rate  float32
+	Average_hrv         int
+	Awake_time          int
+	Bedtime_end         time.Time
+	Bedtime_start       time.Time
+	Day                 string
+	Deep_sleep_duration int
+	Efficiency          int
+	Heart_rate          struct {
 		Interval  float32
 		Items     []float32
 		Timestamp time.Time
@@ -142,13 +138,13 @@ type sleepPeriod struct {
 		Items     []float32
 		Timestamp time.Time
 	}
-	Latency                 int
-	Light_sleep_duration    int
-	Low_battery_alert       bool
-	Lowest_heart_rate       int
-	Movement_30_sec         string
-	Period                  int
-	Readiness struct {
+	Latency              int
+	Light_sleep_duration int
+	Low_battery_alert    bool
+	Lowest_heart_rate    int
+	Movement_30_sec      string
+	Period               int
+	Readiness            struct {
 		Contributors                map[string]int
 		Score                       int
 		Temperature_deviation       float32
@@ -186,16 +182,60 @@ type eventNotification struct {
 	User_id    string
 }
 
+type subRequest struct {
+	Callback_url       string `json:"callback_url"`
+	Event_type         string `json:"event_type"`
+	Data_type          string `json:"data_type"`
+	Verification_token string `json:"verification_token,omitempty"`
+}
+
+type subResponse struct {
+	subRequest                // not sure this works lol
+	ID              string    `json:"id,omitempty"`
+	Expiration_time time.Time `json:"expiration_time,omitempty"`
+}
+
 var OuraApi = flag.String("ouraapi", "https://api.ouraring.com/v2",
 	"Base URL to Oura API entry points")
+var SubscriptionToken string
 
-func doOuraDocRequest(pCfg *oauth2.Config, pUt *userToken,
-	endpoint string, pDest any) error {
+func validUrl(flagval *string) *url.URL {
+	v_url, err := url.Parse(*flagval)
+	if err != nil {
+		log.Fatalf("bogus url value: %s %v", flagval, err)
+	}
+	return v_url
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	client := pCfg.Client(ctx, &pUt.Token)
+func validResponseBody(res *http.Response) []byte {
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("failed to read response body: %v", err)
+		return []byte{}
+	} else if res.StatusCode != http.StatusOK {
+		log.Printf("oura http status was %s", res.Status)
+		log.Printf("oura response body: %s", body)
+		return []byte{}
+	}
+	return body
+}
 
+func getOuraDoc(pUt *userToken, endpoint string,
+	id string, pDest any) error {
+	err := getOuraDocById(pUt, endpoint, id, pDest)
+	if err != nil {
+		log.Printf("error fetching document: %v", err)
+	}
+	return err
+}
+
+func getOuraDocById(pUt *userToken, endpoint string, id string, pDest any) error {
+	ouraurl := validUrl(OuraApi)
+	ouraurl.Path += "/usercollection/" + endpoint + id
+	return doOuraGet(pUt, ouraurl, pDest)
+}
+
+func doOuraDocRequest(pUt *userToken, endpoint string, pDest any) error {
 	ts := func(d time.Duration) string {
 		// go time.Format is odd
 		return time.Now().Add(d).Format("2006-01-02")
@@ -210,13 +250,18 @@ func doOuraDocRequest(pCfg *oauth2.Config, pUt *userToken,
 	params.Add("start_date", ts(-24*time.Hour*time.Duration(backfill_days)))
 	params.Add("end_date", ts(+24*time.Hour))
 
-	ouraurl, err := url.Parse(*OuraApi)
-	if err != nil {
-		return err
-	}
+	ouraurl := validUrl(OuraApi)
 	ouraurl.Path += "/usercollection/" + endpoint
 	ouraurl.RawQuery = params.Encode()
 
+	return doOuraGet(pUt, ouraurl, pDest)
+}
+
+func doOuraGet(pUt *userToken, ouraurl *url.URL,
+	pDest any) error {
+
+	client, cancel := pUt.HttpClient()
+	defer cancel()
 	log.Printf("doing GET %s", ouraurl.String())
 	res, err := client.Get(ouraurl.String())
 	if err != nil {
@@ -249,9 +294,9 @@ func SendDoc[T ouraDoc](doc T, username string) {
 	send := func(k string, v float32) {
 		observationChan <- observation{
 			Timestamp: doc.GetTimestamp(),
-			Username: username,
-			Field: fmt.Sprintf("%s.%s", doc.GetMetricPrefix(), k),
-			Value: v,
+			Username:  username,
+			Field:     fmt.Sprintf("%s.%s", doc.GetMetricPrefix(), k),
+			Value:     v,
 		}
 	}
 
@@ -272,6 +317,78 @@ func SendDoc[T ouraDoc](doc T, username string) {
 			}
 		}
 	}
+}
+
+func createOuraSubscription(pUt *userToken, event_type string,
+	data_type string) (*subResponse, error) {
+
+	client, cancel := pUt.HttpClient()
+	defer cancel()
+	ouraurl := validUrl(OuraApi)
+	ouraurl.Path += "/webhook/subscription"
+
+	c_url := validUrl(BaseUrl)
+	c_url.Path += "/event"
+
+	// this goes in a global variable because a http.Handler is going to
+	// need to verify it, and I don't know how else to get it there.  so
+	// uh don't like call this function a lot of times at once.
+	SubscriptionToken = randomString()
+	sub := subRequest{
+		Callback_url:       c_url.String(),
+		Verification_token: SubscriptionToken,
+		Event_type:         event_type,
+		Data_type:          data_type,
+	}
+
+	buf, err := json.MarshalIndent(sub, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("doing POST to %s, body is: %s", ouraurl.String(), buf)
+
+	req, err := http.NewRequest("POST", ouraurl.String(), bytes.NewBuffer(buf))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-type", "application/json")
+	req.Header.Set("x-client-id", oauthConfig.ClientID)
+	req.Header.Set("x-client-secret", oauthConfig.ClientSecret)
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	// note that even while this request is hanging, oura is calling the
+	// callback url with their challenge protocol.
+
+	body := validResponseBody(res)
+	subResp := subResponse{}
+	err = json.Unmarshal(body, &subResp)
+	return &subResp, err
+}
+
+func renewOuraSubscription(pCfg *oauth2.Config, pUt *userToken,
+	sub *subResponse) error {
+
+	client, cancel := pUt.HttpClient()
+	defer cancel()
+	ouraurl := validUrl(OuraApi)
+	ouraurl.Path += "/webhook/subscription/renew/" + sub.ID
+
+	// someone decided to be fancy with http methods, sigh
+	req, err := http.NewRequest("PUT", ouraurl.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	body := validResponseBody(res)
+	return json.Unmarshal(body, sub)
 }
 
 /* this is corny, but seems to be what you have to do to take
