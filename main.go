@@ -18,10 +18,14 @@ var ServerAddr = flag.String("addr", ":8000",
 	"Address for listen socket")
 var BaseUrl = flag.String("baseurl", "https://oura.singingtree.com",
 	"My server name and path prefix")
+
+/*
 var TlsKey = flag.String("tlspem", "privkey.pem",
 	"Path to private key PEM file")
 var TlsCert = flag.String("tlscert", "cert.pem",
 	"Path to certificate PEM file")
+*/
+
 var ClientFile = flag.String("clientsecrets", "client_creds.json",
 	"Path to JSON file containing oauth2 ClientID and ClientSecret")
 var UsersFile = flag.String("usertokens", "user_creds.json",
