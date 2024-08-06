@@ -1,7 +1,8 @@
 package main
 
 import (
-	"crypto/tls"
+	//"crypto/tls"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,10 +11,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
+var QuietStart = flag.Bool("quietstart", false,
+	"Don't send any requests to Oura API at startup")
 var ServerAddr = flag.String("addr", ":8000",
 	"Address for listen socket")
 var BaseUrl = flag.String("baseurl", "https://oura.singingtree.com",
@@ -73,6 +78,7 @@ func sendError(w http.ResponseWriter, msg string) {
 	io.WriteString(w, msg)
 }
 
+/*
 func loadCertOrDie() *tls.Config {
 	cert, err := tls.LoadX509KeyPair(*TlsCert, *TlsKey)
 	if err != nil {
@@ -82,6 +88,7 @@ func loadCertOrDie() *tls.Config {
 		Certificates: []tls.Certificate{cert},
 	}
 }
+*/
 
 func censorEmail(email string) string {
 	fields := strings.Split(email, "@")
@@ -112,7 +119,7 @@ func validateUsername(n string, claim bool) string {
 
 func processResponse[T ouraDoc](err error, doclist []T, ut userToken) {
 	if err != nil {
-		log.Println(err)
+		log.Printf("document search failed: %s", err)
 	}
 	for _, doc := range doclist {
 		// I tried to use document timestamps to avoid saving duplicate
@@ -144,17 +151,13 @@ func fetchDailiesOnDemand() {
 	}
 }
 
-func pollDailies(die chan bool) {
+func pollDailies() {
 	for {
-		select {
-		case <-time.After(time.Minute * 60):
-			// take a snapshot of UserTokens, and chuck them all into the
-			// daily-fetch hopper
-			for _, ut := range UserTokens.CopyUserTokens() {
-				dailyChan <- ut
-			}
-		case <-die:
-			return
+		<-time.After(time.Minute * 60)
+		// take a snapshot of UserTokens, and chuck them all into the
+		// daily-fetch hopper
+		for _, ut := range UserTokens.CopyUserTokens() {
+			dailyChan <- ut
 		}
 	}
 }
@@ -257,24 +260,41 @@ func renewSubscriptions() {
 	}
 }
 
+func startHttp(addr string, mux http.ServeMux) *http.Server {
+	// a corny way to get http.Server to log requests
+	logger := http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("HTTP %s %s %s\n", r.RemoteAddr, r.Method, r.URL)
+			mux.ServeHTTP(w, r)
+		},
+	)
+	srv := &http.Server{Addr: addr, Handler: logger}
+	go func() {
+		err := srv.ListenAndServe()
+		log.Printf("HTTP server exited: %s", err)
+	}()
+	log.Printf("HTTP server started on %s", addr)
+	// the only reason we want a handle to srv is so that we can call
+	// srv.Shutdown()
+	return srv
+}
+
 func main() {
 	flag.Parse()
 	log.Println("=======> start")
 
 	// start a bunch of workers
 
-	observationChan = make(chan observation, 12)
+	observationChan = make(chan observation, 100)
 	go storeObservations()
-	dailyChan = make(chan userToken, 3)
+	dailyChan = make(chan userToken)
 	go fetchDailiesOnDemand()
-	killPollerChan := make(chan bool)
-	go pollDailies(killPollerChan)
+	go pollDailies()
 	eventChan := make(chan eventNotification)
 	go processWebhookEvents(eventChan)
 
 	// set up oauth, which means retrieving the client secrets and the
 	// cached user tokens.
-
 	var cs clientSecrets
 	parseJsonOrDie(ClientFile, &cs)
 	oauthConfig = &oauth2.Config{
@@ -288,22 +308,7 @@ func main() {
 			TokenURL: "https://api.ouraring.com/oauth/token",
 		},
 	}
-
 	parseJsonOrDie(UsersFile, &UserTokens.Tokens)
-
-	// refresh the daily documents at startup
-	for _, ut := range UserTokens.Tokens {
-		dailyChan <- ut
-	}
-
-	// start subscriptions
-
-	/*
-		listen, err := tls.Listen("tcp", *ServerAddr, loadCertOrDie())
-		if err != nil {
-			log.Fatalf("can't start listener: %v", err)
-		}
-	*/
 
 	mux := http.NewServeMux()
 	/* bizarre mystery: with a proxy_pass match on /tsbridge/, nginx
@@ -317,25 +322,28 @@ func main() {
 	mux.HandleFunc("/newlogin", handleLogin)
 	mux.HandleFunc("/code", handleAuthCode)
 	mux.HandleFunc("/event", handleEvent)
+	srv := startHttp(*ServerAddr, *mux)
 
-	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("HTTP %s %s %s\n", r.RemoteAddr, r.Method, r.URL)
-		mux.ServeHTTP(w, r)
-	})
-	bye := make(chan bool)
-	go func() {
-		err := http.ListenAndServe(*ServerAddr, logger)
-		log.Println(err)
-		bye <- true
-	}()
+	if !*QuietStart {
+		// start subscriptions -- note that we have to have ListenAndServe()
+		// going first, because of callbacks!
+		renewSubscriptions()
+		// refresh the daily documents
+		for _, ut := range UserTokens.Tokens {
+			dailyChan <- ut
+		}
+	}
 
-	log.Printf("http server is running on %s", *ServerAddr)
-
-	// start subscriptions -- note that we have to have ListenAndServe()
-	// going first, because of callbacks!
-	renewSubscriptions()
-
+	// wait for a SIGINT or SIGTERM
+	bye := make(chan os.Signal, 1)
+	signal.Notify(bye, syscall.SIGINT, syscall.SIGTERM)
 	<-bye
-	killPollerChan <- true
+
+	// graceful stop of HTTP server..?
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("failed to stop HTTP server: %s", err)
+	}
 	log.Println("=======> See You Space Cowboy")
 }

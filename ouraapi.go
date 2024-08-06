@@ -257,8 +257,11 @@ func doOuraDocRequest(pUt *userToken, endpoint string, pDest any) error {
 	return doOuraGet(pUt, ouraurl, pDest)
 }
 
-func doOuraGet(pUt *userToken, ouraurl *url.URL,
-	pDest any) error {
+func doOuraGet(pUt *userToken, ouraurl *url.URL, pDest any) error {
+
+	if len(pUt.OauthToken.AccessToken) == 0 {
+		return fmt.Errorf("no access token for %s", pUt.Name)
+	}
 
 	client, cancel := pUt.HttpClient()
 	defer cancel()
@@ -289,8 +292,8 @@ func doOuraGet(pUt *userToken, ouraurl *url.URL,
 
 /* oh god we have a function that uses generics and reflection */
 
-func SendDoc[T ouraDoc](doc T, username string) {
-
+func SendDoc[T ouraDoc](doc T, username string) int {
+	sent_count := 0
 	send := func(k string, v float32) {
 		observationChan <- observation{
 			Timestamp: doc.GetTimestamp(),
@@ -298,8 +301,8 @@ func SendDoc[T ouraDoc](doc T, username string) {
 			Field:     fmt.Sprintf("%s.%s", doc.GetMetricPrefix(), k),
 			Value:     v,
 		}
+		sent_count += 1
 	}
-
 	s := reflect.ValueOf(&doc).Elem()
 	typeOfDoc := s.Type()
 	for i := 0; i < s.NumField(); i++ {
@@ -317,10 +320,15 @@ func SendDoc[T ouraDoc](doc T, username string) {
 			}
 		}
 	}
+	return sent_count
 }
 
 func createOuraSubscription(pUt *userToken, event_type string,
 	data_type string) (*subResponse, error) {
+
+	if len(pUt.OauthToken.AccessToken) == 0 {
+		return nil, fmt.Errorf("no access token for %s", pUt.Name)
+	}
 
 	client, cancel := pUt.HttpClient()
 	defer cancel()

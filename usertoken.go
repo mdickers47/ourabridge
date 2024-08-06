@@ -17,6 +17,14 @@ type userToken struct {
 	LastPoll      time.Time
 }
 
+func (ut *userToken) CensorToken() string {
+	tok := "none"
+	if len(ut.OauthToken.AccessToken) >= 5 {
+		tok = ut.OauthToken.AccessToken[:5]
+	}
+	return tok
+}
+
 func (ut *userToken) GetSubscription(data_type string,
 	event_type string) (int, *subResponse) {
 	for i, s := range ut.Subscriptions {
@@ -44,9 +52,9 @@ func (ut *userToken) HttpClient() (*http.Client, context.CancelFunc) {
 	// way to see or save the replacement token.  It is very hard to
 	// imagine the case where this is useful.  All your oauth grants
 	// will be lost when the process exits.
-	log.Printf("somebody asked me for a HttpClient, my OauthToken is %v",
-		ut.OauthToken.AccessToken[:6])
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	log.Printf("somebody asked me for a HttpClient, my OauthToken is %s",
+		ut.CensorToken())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	ts := NonBrokenTokenSource{
 			tokensource: oauthConfig.TokenSource(ctx, &ut.OauthToken),
 			username:    ut.Name,
@@ -77,7 +85,7 @@ func (nbts NonBrokenTokenSource) Token() (*oauth2.Token, error) {
 	ut := UserTokens.FindByName(nbts.username)
 	if tok.AccessToken != ut.OauthToken.AccessToken {
 		log.Printf("caught an oauth token refresh for %s, new AccessToken is %s",
-			ut.Name, tok.AccessToken[:6])
+			ut.Name, tok.AccessToken[:5])
 		// this is a failsafe until I understand why we are losing the new token
 		f := "debug_new_token.json"
 		dumpJsonOrDie(&f, tok)
@@ -122,9 +130,8 @@ func (set *userTokenSet) Replace(name string, ut userToken) {
 	set.Lock.Lock()
 	defer set.Lock.Unlock()
 	set.Tokens[name] = ut
-	set.Save()
-	log.Printf("updated and saved token for %s: %s",
-		name, ut.OauthToken.AccessToken[:6])
+	dumpJsonOrDie(UsersFile, set.Tokens)
+	log.Printf("updated and saved token for %s: %s", name, ut.CensorToken())
 }
 
 func (set *userTokenSet) Save() {

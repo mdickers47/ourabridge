@@ -96,21 +96,24 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	log.Printf("valid code callback for state=%s", cookie.Value)
 
 	un := strings.Split(cookie.Value, ":")[0]
+	log.Printf("claiming username: %s", un)
 	if msg := validateUsername(un, true); msg != "" {
+		log.Printf("could not validate/claim username: %s", msg)
 		sendError(w, msg)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	log.Printf("starting exchange for username=%s", un)
 	// exchange the "code" for a "token"
 	tok, err := oauthConfig.Exchange(ctx, r.FormValue("code"),
 		oauth2.AccessTypeOffline)
 	if err != nil {
-		sendError(w, fmt.Sprintf("on exchange: %v", err))
+		sendError(w, fmt.Sprintf("could not exchange code: %v", err))
 		return
 	}
-	log.Printf("completed code-token exchange for state=%s", cookie.Value)
+	log.Printf("completed code-token exchange for username=%s", un)
 
 	// populate personal_info, which also tests that the new token works
 	ut := UserTokens.FindByName(un)

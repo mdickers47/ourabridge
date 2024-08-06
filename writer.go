@@ -44,7 +44,7 @@ func storeObservations() {
 			obs.Field,
 			obs.Value,
 			obs.Timestamp.Unix())
-		log.Print(line)
+		//log.Print(line)
 		_, err = io.WriteString(local, line)
 		if err != nil {
 			// if we are unable to record the observations, it is best to die
