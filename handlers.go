@@ -58,12 +58,6 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		"</body></html>\n")
 }
 
-func randomString() string {
-	nonce := make([]byte, 18)
-	rand.Read(nonce)
-	return base64.URLEncoding.EncodeToString(nonce)
-}
-
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	// save the requested username in the opaque "state" string that
 	// oauth2 provides.  note that you are also supposed to put a nonce
@@ -73,7 +67,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		sendError(w, msg)
 		return
 	}
-	state := (r.FormValue("username") + ":" + randomString())
+	state := (r.FormValue("username") + ":" + oura.RandomString())
 	http.SetCookie(w, &http.Cookie{
 		Name:    "oauthstate",
 		Value:   state,

@@ -15,6 +15,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mdickers47/ourabridge/json"
+	"github.com/mdickers47/ourabridge/oura"
 )
 
 var QuietStart = flag.Bool("quietstart", false,
@@ -40,36 +43,10 @@ var GraphitePrefix = flag.String("graphiteprefix", "bio.",
 var LogFile = flag.String("logfile", "data.txt",
 	"Local log file for observations")
 
-type clientSecrets struct {
-	ClientID     string
-	ClientSecret string
-}
-
 var oauthConfig *oauth2.Config
 var dailyChan chan userToken
 var eventChan chan eventNotification
 
-func parseJsonOrDie(f *string, dest any) {
-	bytes, err := os.ReadFile(*f)
-	if err != nil {
-		log.Fatalf("can't read json file: %v", err)
-	}
-	err = json.Unmarshal(bytes, dest)
-	if err != nil {
-		log.Fatalf("can't parse json file: %v", err)
-	}
-}
-
-func dumpJsonOrDie(f *string, obj any) {
-	buf, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		log.Fatalf("error encoding json: %v", err)
-	}
-	err = os.WriteFile(*f, buf, 0600)
-	if err != nil {
-		log.Fatalf("error saving json file %v: %v", f, err)
-	}
-}
 
 func sendError(w http.ResponseWriter, msg string) {
 	log.Println(msg)

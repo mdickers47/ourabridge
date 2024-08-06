@@ -1,4 +1,4 @@
-package main
+package oura
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 	"log"
+
+	"github.com/mdickers47/ourabridge/jdump"
 )
 
 type userToken struct {
@@ -46,7 +48,8 @@ func (ut *userToken) ReplaceSubscription(new *subResponse) {
 	ut.Subscriptions = append(ut.Subscriptions, *new)
 }
 
-func (ut *userToken) HttpClient() (*http.Client, context.CancelFunc) {
+func (ut *userToken) HttpClient(cfg *ClientConfig) (*http.Client,
+	context.CancelFunc) {
 	// We can't use the library supplied Client() because it has a cool
 	// behavior where it refreshes the token silently and gives you no
 	// way to see or save the replacement token.  It is very hard to
@@ -56,7 +59,7 @@ func (ut *userToken) HttpClient() (*http.Client, context.CancelFunc) {
 		ut.CensorToken())
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	ts := NonBrokenTokenSource{
-			tokensource: oauthConfig.TokenSource(ctx, &ut.OauthToken),
+			tokensource: cfg.OauthConfig.TokenSource(ctx, &ut.OauthToken),
 			username:    ut.Name,
 	}		
 	c := oauth2.NewClient(ctx, ts)
@@ -87,8 +90,7 @@ func (nbts NonBrokenTokenSource) Token() (*oauth2.Token, error) {
 		log.Printf("caught an oauth token refresh for %s, new AccessToken is %s",
 			ut.Name, tok.AccessToken[:5])
 		// this is a failsafe until I understand why we are losing the new token
-		f := "debug_new_token.json"
-		dumpJsonOrDie(&f, tok)
+		jdump.DumpJsonOrDie("debug_new_token.json", tok)
 		ut.OauthToken = *tok
 		UserTokens.Replace(nbts.username, *ut)
 	}
@@ -97,16 +99,17 @@ func (nbts NonBrokenTokenSource) Token() (*oauth2.Token, error) {
 
 // a userTokenSet is a container for a bunch of userTokens that you
 // should only access through its methods, in order to be thread safe.
-type userTokenSet struct {
+type UserTokenSet struct {
 	Tokens map[string]userToken
 	Lock   sync.Mutex
+	File   string
 }
 
 // this is the global data structure that we will use anywhere it is
 // convenient lol
-var UserTokens userTokenSet
+var UserTokens UserTokenSet
 
-func (set *userTokenSet) FindById(id string) *userToken {
+func (set *UserTokenSet) FindById(id string) *userToken {
 	for _, i := range set.Tokens {
 		if i.PI.ID == id {
 			return &i
@@ -115,7 +118,7 @@ func (set *userTokenSet) FindById(id string) *userToken {
 	return nil
 }
 
-func (set *userTokenSet) FindByName(name string) *userToken {
+func (set *UserTokenSet) FindByName(name string) *userToken {
 	// probably overkill but maybe this implementation changes
 	// some day
 	ut, ok := set.Tokens[name]
@@ -126,21 +129,21 @@ func (set *userTokenSet) FindByName(name string) *userToken {
 	}
 }
 
-func (set *userTokenSet) Replace(name string, ut userToken) {
+func (set *UserTokenSet) Replace(name string, ut userToken) {
 	set.Lock.Lock()
 	defer set.Lock.Unlock()
 	set.Tokens[name] = ut
-	dumpJsonOrDie(UsersFile, set.Tokens)
+	jdump.DumpJsonOrDie(set.File, set.Tokens)
 	log.Printf("updated and saved token for %s: %s", name, ut.CensorToken())
 }
 
-func (set *userTokenSet) Save() {
+func (set *UserTokenSet) Save() {
 	set.Lock.Lock()
 	defer set.Lock.Unlock()
-	dumpJsonOrDie(UsersFile, set.Tokens)
+	jdump.DumpJsonOrDie(set.File, set.Tokens)
 }
 
-func (set *userTokenSet) CopyUserTokens() []userToken {
+func (set *UserTokenSet) CopyUserTokens() []userToken {
 	set.Lock.Lock()
 	defer set.Lock.Unlock()
 	uts := make([]userToken, 0, len(set.Tokens))

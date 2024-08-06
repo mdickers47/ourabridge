@@ -1,11 +1,12 @@
-package main
+package oura
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"golang.org/x/oauth2"
 	"io"
 	"log"
 	"net/http"
@@ -220,28 +221,21 @@ func validResponseBody(res *http.Response) []byte {
 	return body
 }
 
-func getOuraDoc(pUt *userToken, endpoint string,
+func GetDocByID(cfg *ClientConfig, ut *userToken, endpoint string,
 	id string, pDest any) error {
-	err := getOuraDocById(pUt, endpoint, id, pDest)
-	if err != nil {
-		log.Printf("error fetching document: %v", err)
-	}
-	return err
-}
-
-func getOuraDocById(pUt *userToken, endpoint string, id string, pDest any) error {
 	ouraurl := validUrl(OuraApi)
 	ouraurl.Path += "/usercollection/" + endpoint + id
-	return doOuraGet(pUt, ouraurl, pDest)
+	return doGet(cfg, ut, ouraurl.String(), pDest)
 }
 
-func doOuraDocRequest(pUt *userToken, endpoint string, pDest any) error {
+func SearchDocs(cfg *ClientConfig, ut *userToken, endpoint string,
+	pDest any) error {
 	ts := func(d time.Duration) string {
 		// go time.Format is odd
 		return time.Now().Add(d).Format("2006-01-02")
 	}
 	backfill_days := 1
-	if pUt.LastPoll.IsZero() {
+	if ut.LastPoll.IsZero() {
 		// if we have never seen you before, start by searching backwards
 		// 7 days
 		backfill_days = 7
@@ -249,24 +243,21 @@ func doOuraDocRequest(pUt *userToken, endpoint string, pDest any) error {
 	params := url.Values{}
 	params.Add("start_date", ts(-24*time.Hour*time.Duration(backfill_days)))
 	params.Add("end_date", ts(+24*time.Hour))
-
-	ouraurl := validUrl(OuraApi)
-	ouraurl.Path += "/usercollection/" + endpoint
+	ouraurl := cfg.OuraPath("/usercollection/" + endpoint)
 	ouraurl.RawQuery = params.Encode()
-
-	return doOuraGet(pUt, ouraurl, pDest)
+	return doGet(cfg, ut, ouraurl.String(), pDest)
 }
 
-func doOuraGet(pUt *userToken, ouraurl *url.URL, pDest any) error {
+func doGet(cfg *ClientConfig, ut *userToken, ouraurl string, pDest any) error {
 
-	if len(pUt.OauthToken.AccessToken) == 0 {
-		return fmt.Errorf("no access token for %s", pUt.Name)
+	if len(ut.OauthToken.AccessToken) == 0 {
+		return fmt.Errorf("no access token for %s", ut.Name)
 	}
 
-	client, cancel := pUt.HttpClient()
+	client, cancel := ut.HttpClient(cfg)
 	defer cancel()
-	log.Printf("doing GET %s", ouraurl.String())
-	res, err := client.Get(ouraurl.String())
+	log.Printf("doing GET %s", ouraurl)
+	res, err := client.Get(ouraurl)
 	if err != nil {
 		return err
 	}
@@ -290,12 +281,18 @@ func doOuraGet(pUt *userToken, ouraurl *url.URL, pDest any) error {
 	return nil
 }
 
+func RandomString() string {
+	nonce := make([]byte, 18)
+	rand.Read(nonce)
+	return base64.URLEncoding.EncodeToString(nonce)
+}
+
 /* oh god we have a function that uses generics and reflection */
 
 func SendDoc[T ouraDoc](doc T, username string) int {
 	sent_count := 0
 	send := func(k string, v float32) {
-		observationChan <- observation{
+		observationChan <- Observation{
 			Timestamp: doc.GetTimestamp(),
 			Username:  username,
 			Field:     fmt.Sprintf("%s.%s", doc.GetMetricPrefix(), k),
@@ -323,27 +320,22 @@ func SendDoc[T ouraDoc](doc T, username string) int {
 	return sent_count
 }
 
-func createOuraSubscription(pUt *userToken, event_type string,
+func CreateSubscription(cfg *ClientConfig, pUt *userToken, event_type string,
 	data_type string) (*subResponse, error) {
 
 	if len(pUt.OauthToken.AccessToken) == 0 {
 		return nil, fmt.Errorf("no access token for %s", pUt.Name)
 	}
 
-	client, cancel := pUt.HttpClient()
+	client, cancel := pUt.HttpClient(cfg)
 	defer cancel()
-	ouraurl := validUrl(OuraApi)
-	ouraurl.Path += "/webhook/subscription"
-
-	c_url := validUrl(BaseUrl)
-	c_url.Path += "/event"
 
 	// this goes in a global variable because a http.Handler is going to
 	// need to verify it, and I don't know how else to get it there.  so
 	// uh don't like call this function a lot of times at once.
-	SubscriptionToken = randomString()
+	SubscriptionToken = RandomString()
 	sub := subRequest{
-		Callback_url:       c_url.String(),
+		Callback_url:       cfg.MyPath("/event").String(),
 		Verification_token: SubscriptionToken,
 		Event_type:         event_type,
 		Data_type:          data_type,
@@ -354,15 +346,15 @@ func createOuraSubscription(pUt *userToken, event_type string,
 		return nil, err
 	}
 
-	log.Printf("doing POST to %s, body is: %s", ouraurl.String(), buf)
-
-	req, err := http.NewRequest("POST", ouraurl.String(), bytes.NewBuffer(buf))
+	dest := cfg.OuraPath("/webhook/subscription").String()
+	log.Printf("doing POST to %s, body is: %s", dest, buf)
+	req, err := http.NewRequest("POST", dest, bytes.NewBuffer(buf))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-type", "application/json")
-	req.Header.Set("x-client-id", oauthConfig.ClientID)
-	req.Header.Set("x-client-secret", oauthConfig.ClientSecret)
+	req.Header.Set("x-client-id", cfg.OauthConfig.ClientID)
+	req.Header.Set("x-client-secret", cfg.OauthConfig.ClientSecret)
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -376,16 +368,15 @@ func createOuraSubscription(pUt *userToken, event_type string,
 	return &subResp, err
 }
 
-func renewOuraSubscription(pCfg *oauth2.Config, pUt *userToken,
+func RenewSubscription(cfg *ClientConfig, pUt *userToken,
 	sub *subResponse) error {
 
-	client, cancel := pUt.HttpClient()
+	client, cancel := pUt.HttpClient(cfg)
 	defer cancel()
-	ouraurl := validUrl(OuraApi)
-	ouraurl.Path += "/webhook/subscription/renew/" + sub.ID
+	ouraurl := cfg.OuraPath("/webhook/subscription/renew/" + sub.ID).String()
 
 	// someone decided to be fancy with http methods, sigh
-	req, err := http.NewRequest("PUT", ouraurl.String(), nil)
+	req, err := http.NewRequest("PUT", ouraurl, nil)
 	if err != nil {
 		return err
 	}
