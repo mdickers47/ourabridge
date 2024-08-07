@@ -14,7 +14,6 @@ type UserToken struct {
 	Name          string
 	PI            personalInfo
 	OauthToken    oauth2.Token
-	Subscriptions []subResponse
 	LastPoll      time.Time
 }
 
@@ -24,27 +23,6 @@ func (ut *UserToken) CensorToken() string {
 		tok = ut.OauthToken.AccessToken[:5]
 	}
 	return tok
-}
-
-func (ut *UserToken) GetSubscription(data_type string,
-	event_type string) (int, *subResponse) {
-	for i, s := range ut.Subscriptions {
-		if s.Data_type == data_type && s.Event_type == event_type {
-			return i, &s
-		}
-	}
-	return -1, nil
-}
-
-func (ut *UserToken) ReplaceSubscription(new subResponse) {
-	idx, _ := ut.GetSubscription(new.Data_type, new.Event_type)
-	if idx >= 0 {
-		// this oddity is claimed to be the idiomatic Go way to delete something
-		// from a slice
-		ut.Subscriptions = append(ut.Subscriptions[:idx],
-			ut.Subscriptions[idx+1:]...)
-	}
-	ut.Subscriptions = append(ut.Subscriptions, new)
 }
 
 func (ut *UserToken) HttpClient(cfg *ClientConfig) (*http.Client,

@@ -6,35 +6,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 )
 
-func getSubscriptions(cfg *ClientConfig, ut *UserToken) []subResponse {
-	var body []byte
-	var err  error
-	subList := make([]subResponse, 1)
-	if body, err = webhookReq(cfg, ut, "GET", "", nil); err != nil {
-		log.Printf("failed to list subscriptions: %s", err)
-		return subList
-	}
-	if err = json.Unmarshal(body, &subList); err != nil {
-		log.Printf("failed to parse subscription list: %s", err)
-		log.Printf("body was: %s", body)
-	}
-	return subList
-}
-
-func webhookReq(cfg *ClientConfig, ut *UserToken, method string, id string,
+func webhookReq(cfg *ClientConfig, method string, id string,
 	body []byte) ([]byte, error) {
 	var req *http.Request
 	var res *http.Response
 	var err error
 
-	if len(ut.OauthToken.AccessToken) == 0 {
-		return nil, fmt.Errorf("no access token for %s", ut.Name)
-	}
-	client, cancel := ut.HttpClient(cfg)
-	defer cancel()
-
+	// the "create subscription" operation in particular is very slow
+	client := http.Client{Timeout: 75 * time.Second}
 	path := "/webhook/subscription"
 	if len(id) > 0 {
 		path += "/" + id
@@ -47,7 +29,7 @@ func webhookReq(cfg *ClientConfig, ut *UserToken, method string, id string,
 	req.Header.Set("Content-type", "application/json")
 	req.Header.Set("x-client-id", cfg.OauthConfig.ClientID)
 	req.Header.Set("x-client-secret", cfg.OauthConfig.ClientSecret)
-	log.Printf("doing %s, body is %s", method, body)
+	log.Printf("doing %s %s, body is %s", method, dest, body)
 	if res, err = client.Do(req); err != nil {
 		return nil, fmt.Errorf("failed to Do request: %s", err)
 	}
@@ -57,8 +39,23 @@ func webhookReq(cfg *ClientConfig, ut *UserToken, method string, id string,
 	return body, nil
 }
 
-func CreateSubscription(cfg *ClientConfig, ut *UserToken, event_type string,
-	data_type string) (*subResponse, error) {
+func getSubscriptions(cfg *ClientConfig) []subResponse {
+	var body []byte
+	var err error
+	subList := make([]subResponse, 0, 8)
+	if body, err = webhookReq(cfg, "GET", "", nil); err != nil {
+		log.Printf("failed to list subscriptions: %s", err)
+		return subList
+	}
+	if err = json.Unmarshal(body, &subList); err != nil {
+		log.Printf("failed to parse subscription list: %s", err)
+		log.Printf("body was: %s", body)
+	}
+	return subList
+}
+
+func CreateSubscription(cfg *ClientConfig, data_type string,
+	event_type string) (*subResponse, error) {
 
 	// this goes in basically a global variable because a http.Handler
 	// is going to need to verify it.  so uh don't like call this
@@ -78,9 +75,9 @@ func CreateSubscription(cfg *ClientConfig, ut *UserToken, event_type string,
 		return nil, err
 	}
 
-	// note that even while this request is hanging, oura is calling the
+	// note that while this request is hanging, oura is calling the
 	// callback url with their challenge protocol.
-	body, err := webhookReq(cfg, ut, "POST", "", buf)
+	body, err := webhookReq(cfg, "POST", "", buf)
 	if err != nil {
 		return nil, err
 	}
@@ -89,25 +86,8 @@ func CreateSubscription(cfg *ClientConfig, ut *UserToken, event_type string,
 	return &subResp, err
 }
 
-func RenewSubscription(cfg *ClientConfig, ut *UserToken,
-	sub *subResponse) error {
-
-	client, cancel := ut.HttpClient(cfg)
-	defer cancel()
-	ouraurl := cfg.OuraPath("/webhook/subscription/renew/" + sub.ID).String()
-
-	// someone decided to be fancy with http methods, sigh
-	req, err := http.NewRequest("PUT", ouraurl, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-type", "application/json")
-	res, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	body, err := validResponseBody(res)
+func RenewSubscription(cfg *ClientConfig, sub *subResponse) error {
+	body, err := webhookReq(cfg, "PUT", "renew/"+sub.ID, nil)
 	if err != nil {
 		return err
 	}
@@ -163,15 +143,24 @@ func ProcessEvent(cfg *ClientConfig, event EventNotification,
 }
 
 func ValidateSubscriptions(cfg *ClientConfig) {
+	// clear garbage collection flags
+	for _, sub := range cfg.Subscriptions.Subs {
+		sub.mark = false
+	}
 	// ask oura what subscriptions it thinks we have, and check to see if
 	// we have them in our list.
-	for _, ut := range cfg.UserTokens.Tokens {
-		for _, sr := range getSubscriptions(cfg, &ut) {
+	for _, sr := range getSubscriptions(cfg) {
+		sr.mark = true
+		cfg.Subscriptions.Replace(sr)
+		/*
 			found := false
-			for _, sub := range ut.Subscriptions {
+			for _, sub := range cfg.Subscriptions.Subs {
 				if sub.ID == sr.ID {
-					// we actually did know about this subscription, lucky day
-					ut.ReplaceSubscription(sr)
+					// we actually did know about this subscription, lucky day.
+					// we save the new copy oura gave us, in case Expiration_time
+					// has changed or something.
+					sr.mark = true
+					cfg.Subscriptions.Replace(sr)
 					found = true
 				}
 			}
@@ -180,10 +169,71 @@ func ValidateSubscriptions(cfg *ClientConfig) {
 				// because we lost them and they are not included in "List
 				// Webhook Subscriptions."  all we can do is delete it.
 				log.Printf("deleting subscription %s", sr.ID)
-				if _, err := webhookReq(cfg, &ut, "DELETE", sr.ID, nil); err != nil {
+				if _, err := webhookReq(cfg, "DELETE", sr.ID, nil); err != nil {
 					log.Printf("failed to delete mystery subscription: %s", err)
 				}
-			}				
+			}
+		*/
+	}
+
+	// delete our memory of any subscription that oura does not know about
+	for _, sub := range cfg.Subscriptions.Subs {
+		if !sub.mark {
+			cfg.Subscriptions.Delete(sub)
+			log.Printf("deleted forgotten subscription %s/%s id=%s",
+				sub.Data_type, sub.Event_type, sub.ID)
 		}
 	}
+
+	// now that the local list is in agreement with oura, check that we
+	// have a subscription for every document type we like, renew any
+	// that are short-dated, and [try to] create the ones that are
+	// missing
+	api_fail_count := 0
+	checkFail := func(err error) bool {
+		if err != nil {
+			log.Printf("webhook api call failed: %s", err)
+			if api_fail_count += 1; api_fail_count > 3 {
+				log.Printf("too many webhook api failures, giving up for now")
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, data_type := range []string{"daily_activity", "daily_readiness",
+		"daily_sleep", "sleep"} {
+		for _, event_type := range []string{"create", "update"} {
+			_, sub := cfg.Subscriptions.Find(data_type, event_type)
+			if sub == nil {
+				// no subscription of this data_type/event_type exists
+				sub, err := CreateSubscription(cfg, data_type, event_type)
+				if err == nil {
+					cfg.Subscriptions.Replace(*sub)
+				} else {
+					if checkFail(err) {
+						return
+					}
+				}
+			} else {
+				// we think we have this subscription already
+				lifetime := time.Time(sub.Expiration_time).Sub(time.Now())
+				// the expiration dates are observed to be weeks in the future
+				if lifetime < 24*time.Hour {
+					if err := RenewSubscription(cfg, sub); err != nil {
+						if checkFail(err) {
+							return
+						}
+					} else {
+						log.Printf("renewed subscription %s/%s until %s",
+							sub.Data_type, sub.Event_type, time.Time(sub.Expiration_time))
+					}
+				} else {
+					// we have a subscription and it is unexpired
+					log.Printf("subscription %s/%s is good until %s",
+						sub.Data_type, sub.Event_type, time.Time(sub.Expiration_time))
+				}
+			} // if sub == nil
+		} // for event_type
+	} // for data_type
 }
