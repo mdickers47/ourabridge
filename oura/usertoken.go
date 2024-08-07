@@ -3,18 +3,16 @@ package oura
 import (
 	"context"
 	"golang.org/x/oauth2"
+	"log"
 	"net/http"
 	"time"
-	"log"
-
-	"github.com/mdickers47/ourabridge/jdump"
 )
 
 type UserToken struct {
-	Name          string
-	PI            personalInfo
-	OauthToken    oauth2.Token
-	LastPoll      time.Time
+	Name       string
+	PI         personalInfo
+	OauthToken oauth2.Token
+	LastPoll   time.Time
 }
 
 func (ut *UserToken) CensorToken() string {
@@ -37,7 +35,7 @@ func (ut *UserToken) HttpClient(cfg *ClientConfig) (*http.Client,
 		tokensource: cfg.OauthConfig.TokenSource(ctx, &ut.OauthToken),
 		username:    ut.Name,
 		tokenset:    &cfg.UserTokens,
-	}		
+	}
 	c := oauth2.NewClient(ctx, ts)
 	return c, cancel
 }
@@ -70,5 +68,4 @@ func (nbts NonBrokenTokenSource) Token() (*oauth2.Token, error) {
 		nbts.tokenset.Replace(nbts.username, *ut)
 	}
 	return tok, err
-}			
-
+}
