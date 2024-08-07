@@ -117,6 +117,7 @@ func RenewSubscription(cfg *ClientConfig, ut *UserToken,
 func ProcessEvent(cfg *ClientConfig, event EventNotification,
 	sink chan<- Observation) {
 	ut := cfg.UserTokens.FindById(event.User_id)
+
 	if ut == nil {
 		log.Printf("webhook notification for unknown user %s", event.User_id)
 		return
@@ -126,38 +127,45 @@ func ProcessEvent(cfg *ClientConfig, event EventNotification,
 	if event.Event_type == "update" || event.Event_type == "create" {
 		// the other possible Event_type is "delete" and there is nothing we
 		// can do with that.
+		var err error
+		var i   int
 		switch event.Data_type {
 		case "daily_activity":
 			da := dailyActivity{}
-			err := GetDocByID(cfg, ut, "daily_activity", event.Object_id, &da)
-			if err != nil {
-				SendDoc(da, ut.Name, sink)
+			err = GetDocByID(cfg, ut, "daily_activity", event.Object_id, &da)
+			if err == nil {
+				i = SendDoc(da, ut.Name, sink)
 			}
 		case "daily_readiness":
 			dr := dailyReadiness{}
-			err := GetDocByID(cfg, ut, "daily_readiness", event.Object_id, &dr)
-			if err != nil {
-				SendDoc(dr, ut.Name, sink)
+			err = GetDocByID(cfg, ut, "daily_readiness", event.Object_id, &dr)
+			if err == nil {
+				i = SendDoc(dr, ut.Name, sink)
 			}
 		case "daily_sleep":
 			ds := dailySleep{}
-			err := GetDocByID(cfg, ut, "daily_sleep", event.Object_id, &ds)
-			if err != nil {
-				SendDoc(ds, ut.Name, sink)
+			err = GetDocByID(cfg, ut, "daily_sleep", event.Object_id, &ds)
+			if err == nil {
+				i = SendDoc(ds, ut.Name, sink)
 			}
 		case "sleep":
 			sp := sleepPeriod{}
-			err := GetDocByID(cfg, ut, "sleep", event.Object_id, &sp)
-			if err != nil {
-				SendDoc(sp, ut.Name, sink)
+			err = GetDocByID(cfg, ut, "sleep", event.Object_id, &sp)
+			if err == nil {
+				i = SendDoc(sp, ut.Name, sink)
 			}
 		default:
 			// unhandled types include:
 			// tag enhanced_tag workout session daily_spo2 sleep_time
 			// rest_mode_period ring_configuration daily_stress
 			// daily_cycle_phases
-			log.Printf("webhook notification for unhandled type: %s",
-				event.Data_type)
+			err = fmt.Errorf("unhandled notification type: %s", event.Data_type)
+		}
+		if err != nil {
+			log.Printf("failed to retrieve document %s: %s", event.Object_id, err)
+		} else {
+			log.Printf("%s document id=%s processed for %d observations",
+				event.Data_type, event.Object_id, i)
 		}
 	}
 }
