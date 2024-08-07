@@ -32,8 +32,6 @@ func (ut *UserToken) HttpClient(cfg *ClientConfig) (*http.Client,
 	// way to see or save the replacement token.  It is very hard to
 	// imagine the case where this is useful.  All your oauth grants
 	// will be lost when the process exits.
-	log.Printf("somebody asked me for a HttpClient, my OauthToken is %s",
-		ut.CensorToken())
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	ts := NonBrokenTokenSource{
 		tokensource: cfg.OauthConfig.TokenSource(ctx, &ut.OauthToken),
@@ -68,8 +66,6 @@ func (nbts NonBrokenTokenSource) Token() (*oauth2.Token, error) {
 	if tok.AccessToken != ut.OauthToken.AccessToken {
 		log.Printf("caught an oauth token refresh for %s, new AccessToken is %s",
 			ut.Name, tok.AccessToken[:5])
-		// this is a failsafe until I understand why we are losing the new token
-		jdump.DumpJsonOrDie("debug_new_token.json", tok)
 		ut.OauthToken = *tok
 		nbts.tokenset.Replace(nbts.username, *ut)
 	}
