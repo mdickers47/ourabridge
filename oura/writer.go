@@ -38,23 +38,25 @@ func StoreObservations(cfg *ClientConfig, src chan Observation) {
 			local, err = os.OpenFile(cfg.LocalDataLog,
 				os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
-				log.Fatalf("can't open log file: %v", err)
+				log.Printf("can't open log file: %s", err)
+			} else {
+				log.Printf("observations logged to local file %s", cfg.LocalDataLog)
+				have_local = true
 			}
-			log.Printf("observations logged to local file %s", cfg.LocalDataLog)
-			have_local = true
 		}
 		if len(cfg.GraphiteServer) > 0 {
 			graphite, err = net.Dial("tcp", cfg.GraphiteServer)
 			if err != nil {
-				log.Fatalf("can't connect to graphite server: %s", err)
+				log.Printf("can't connect to graphite server: %s", err)
+			} else {
+				log.Printf("observations going to graphite receiver at %s",
+					cfg.GraphiteServer)
+				have_graphite = true
 			}
-			log.Printf("observations going to graphite receiver at %s",
-				cfg.GraphiteServer)
-			have_graphite = true
 		}
 
 		if !(have_local || have_graphite) {
-			log.Fatalf("neither local log file nor graphite server is provided")
+			log.Fatalf("neither local log file nor graphite server is working")
 		}
 	}
 
