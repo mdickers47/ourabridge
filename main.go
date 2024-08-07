@@ -113,6 +113,23 @@ func poll(sink chan<- oura.UserToken) {
 	}
 }
 
+func sigHandler(source <-chan os.Signal, sink chan<- oura.UserToken) {
+	for sig := range source {
+		switch sig {
+		case syscall.SIGHUP:
+			log.Printf("received SIGHUP, rereading config files and reopening logs")
+			*Cfg = oura.LoadClientConfig(*ClientFile)
+			Cfg.Reconnect = true
+		case syscall.SIGUSR1:
+			log.Printf("received SIGUSR1, re-polling documents and subscriptions")
+			oura.ValidateSubscriptions(Cfg)
+			for _, ut := range Cfg.UserTokens.CopyUserTokens() {
+				sink <- ut
+			}
+		}
+	}
+}
+
 func main() {
 	flag.Parse()
 	log.Println("=======> start")
@@ -179,7 +196,12 @@ func main() {
 	// periodically run document searches and refresh subscriptions
 	go poll(pollChan)
 
-	// wait for a SIGINT or SIGTERM
+	// handle SIGHUP and SIGUSR1
+	sigChan := make(chan os.Signal, 1)
+	go sigHandler(sigChan, pollChan)
+	signal.Notify(sigChan, syscall.SIGHUP, syscall.SIGUSR1)
+
+	// WAIT HERE for a SIGINT or SIGTERM
 	bye := make(chan os.Signal, 1)
 	signal.Notify(bye, syscall.SIGINT, syscall.SIGTERM)
 	<-bye

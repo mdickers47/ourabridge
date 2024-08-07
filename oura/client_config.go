@@ -32,6 +32,7 @@ type ClientConfig struct {
 	//     AuthURL string
 	//     TokenURL string
 	//   }
+	Reconnect     bool            `json:"-"`
 	Verifier      string          `json:"-"`
 	UserTokens    UserTokenSet    `json:"-"`
 	Subscriptions SubscriptionSet `json:"-"`
