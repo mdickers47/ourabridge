@@ -86,10 +86,12 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request,
 	if cookie, err = r.Cookie("oauthstate"); err != nil {
 		sendError(w, "missing required cookie")
 		return
-	} else if err = cookie.Valid(); err != nil {
-		msg := fmt.Sprintf("oauthstate cookie invalid: %v", err)
-		sendError(w, msg)
-		return
+		/* lol this can't be used; the cookie is invalid as supplied
+		} else if err = cookie.Valid(); err != nil {
+			msg := fmt.Sprintf("oauthstate cookie invalid: %v", err)
+			sendError(w, msg)
+			return
+		*/
 	} else if r.FormValue("state") != cookie.Value {
 		msg := fmt.Sprintf("state nonce mismatch: cookie %v formvalue %v\n",
 			cookie.Value, r.FormValue("state"))
