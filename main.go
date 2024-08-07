@@ -108,8 +108,8 @@ func renewSubscriptions() {
 						}
 					} else {
 						ut.ReplaceSubscription(*s)
-						log.Printf("subscribed to %s/%s/%s expiring %v",
-							ut.Name, data_type, event_type, s.Expiration_time)
+						log.Printf("subscribed to %s/%s/%s expiring %s",
+							ut.Name, data_type, event_type, time.Time(s.Expiration_time))
 					}
 				} else {
 					// there is already a subscription, let's see if it is expiring
@@ -126,8 +126,8 @@ func renewSubscriptions() {
 							}
 						} else {
 							ut.ReplaceSubscription(*s)
-							log.Printf("renewed %s/%s/%s until %v",
-								ut.Name, data_type, event_type, s.Expiration_time)
+							log.Printf("renewed %s/%s/%s until %s",
+								ut.Name, data_type, event_type, time.Time(s.Expiration_time))
 						}
 					}
 				}
