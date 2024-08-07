@@ -3,10 +3,8 @@ package main
 import (
 	//"crypto/tls"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"golang.org/x/oauth2"
 	"io"
 	"log"
 	"net/http"
@@ -16,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mdickers47/ourabridge/json"
+	"github.com/mdickers47/ourabridge/jdump"
 	"github.com/mdickers47/ourabridge/oura"
 )
 
@@ -24,9 +22,6 @@ var QuietStart = flag.Bool("quietstart", false,
 	"Don't send any requests to Oura API at startup")
 var ServerAddr = flag.String("addr", ":8000",
 	"Address for listen socket")
-var BaseUrl = flag.String("baseurl", "https://oura.singingtree.com",
-	"My server name and path prefix")
-
 /*
 var TlsKey = flag.String("tlspem", "privkey.pem",
 	"Path to private key PEM file")
@@ -38,15 +33,11 @@ var ClientFile = flag.String("clientsecrets", "client_creds.json",
 	"Path to JSON file containing oauth2 ClientID and ClientSecret")
 var UsersFile = flag.String("usertokens", "user_creds.json",
 	"Path to JSON file containing list of user tokens")
-var GraphitePrefix = flag.String("graphiteprefix", "bio.",
-	"Prefix to Graphite data points")
-var LogFile = flag.String("logfile", "data.txt",
-	"Local log file for observations")
 
-var oauthConfig *oauth2.Config
-var dailyChan chan userToken
-var eventChan chan eventNotification
-
+// this is a singleton object that basically all of the code will want
+// to access, so a global variable is no worse than passing a
+// reference through every single method, and saves a lot of mess.
+var Cfg *oura.ClientConfig
 
 func sendError(w http.ResponseWriter, msg string) {
 	log.Println(msg)
@@ -84,106 +75,14 @@ func validateUsername(n string, claim bool) string {
 	} else if strings.Index(n, ".") >= 0 {
 		return "username cannot contain ."
 	}
-	if UserTokens.FindByName(n) != nil {
+	if Cfg.UserTokens.FindByName(n) != nil {
 		return "username is taken"
 	}
 	if claim {
 		// it's Replacing nothing but that's fine
-		UserTokens.Replace(n, userToken{Name: n})
+		Cfg.UserTokens.Replace(n, oura.UserToken{Name: n})
 	}
 	return ""
-}
-
-func processResponse[T ouraDoc](err error, doclist []T, ut userToken) {
-	if err != nil {
-		log.Printf("document search failed: %s", err)
-	}
-	for _, doc := range doclist {
-		// I tried to use document timestamps to avoid saving duplicate
-		// observations, but it doesn't work without getting complicated,
-		// because documents arrive with back-dated timestamps.
-		SendDoc(doc, ut.Name)
-	}
-}
-
-func fetchDailiesOnDemand() {
-	for ut := range dailyChan {
-		dr := readinessResponse{}
-		err := doOuraDocRequest(&ut, "daily_readiness", &dr)
-		processResponse(err, dr.Data, ut)
-		da := activityResponse{}
-		err = doOuraDocRequest(&ut, "daily_activity", &da)
-		processResponse(err, da.Data, ut)
-		ds := sleepResponse{}
-		err = doOuraDocRequest(&ut, "daily_sleep", &ds)
-		processResponse(err, ds.Data, ut)
-		dp := sleepPeriodResponse{}
-		err = doOuraDocRequest(&ut, "sleep", &dp)
-		processResponse(err, dp.Data, ut)
-		hr := heartrateResponse{}
-		err = doOuraDocRequest(&ut, "heartrate", &hr)
-		processResponse(err, hr.Data, ut)
-		ut.LastPoll = time.Now()
-		UserTokens.Replace(ut.Name, ut)
-	}
-}
-
-func pollDailies() {
-	for {
-		<-time.After(time.Minute * 60)
-		// take a snapshot of UserTokens, and chuck them all into the
-		// daily-fetch hopper
-		for _, ut := range UserTokens.CopyUserTokens() {
-			dailyChan <- ut
-		}
-	}
-}
-
-func processWebhookEvents(incoming chan eventNotification) {
-	for event := range incoming {
-		ut := UserTokens.FindById(event.User_id)
-		if ut == nil {
-			log.Printf("webhook notification for mystery user: %s", event.User_id)
-			continue
-		}
-		// the other possible Event_type is "delete" and there is nothing we
-		// can do with that.
-		if event.Event_type == "update" || event.Event_type == "create" {
-			switch event.Data_type {
-			case "daily_activity":
-				da := dailyActivity{}
-				err := getOuraDoc(ut, "daily_activity", event.Object_id, &da)
-				if err != nil {
-					SendDoc(da, ut.Name)
-				}
-			case "daily_readiness":
-				dr := dailyReadiness{}
-				err := getOuraDoc(ut, "daily_readiness", event.Object_id, &dr)
-				if err != nil {
-					SendDoc(dr, ut.Name)
-				}
-			case "daily_sleep":
-				ds := dailySleep{}
-				err := getOuraDoc(ut, "daily_sleep", event.Object_id, &ds)
-				if err != nil {
-					SendDoc(ds, ut.Name)
-				}
-			case "sleep":
-				sp := sleepPeriod{}
-				err := getOuraDocById(ut, "sleep", event.Object_id, &sp)
-				if err != nil {
-					SendDoc(sp, ut.Name)
-				}
-			default:
-				// unhandled types include:
-				// tag enhanced_tag workout session daily_spo2 sleep_time
-				// rest_mode_period ring_configuration daily_stress
-				// daily_cycle_phases
-				log.Printf("webhook notification for unhandled type: %s",
-					event.Data_type)
-			}
-		}
-	}
 }
 
 func renewSubscriptions() {
@@ -193,13 +92,13 @@ func renewSubscriptions() {
 	// piss off cloudfront on oura's side and get locked out.
 	var err error
 	err_count := 0
-	for _, ut := range UserTokens.Tokens {
+	for _, ut := range Cfg.UserTokens.Tokens {
 		for _, data_type := range []string{"daily_activity", "daily_readiness",
 			"daily_sleep", "sleep"} {
 			for _, event_type := range []string{"create", "update"} {
 				_, s := ut.GetSubscription(data_type, event_type)
 				if s == nil {
-					s, err = createOuraSubscription(&ut, event_type, data_type)
+					s, err = oura.CreateSubscription(Cfg, &ut, event_type, data_type)
 					if err != nil {
 						log.Printf("can't create subscription %s/%s/%s: %v",
 							ut.Name, data_type, event_type, err)
@@ -208,16 +107,16 @@ func renewSubscriptions() {
 							return
 						}
 					} else {
-						ut.ReplaceSubscription(s)
+						ut.ReplaceSubscription(*s)
 						log.Printf("subscribed to %s/%s/%s expiring %v",
 							ut.Name, data_type, event_type, s.Expiration_time)
 					}
 				} else {
 					// there is already a subscription, let's see if it is expiring
 					// soon
-					lifetime := s.Expiration_time.Sub(time.Now())
+					lifetime := time.Time(s.Expiration_time).Sub(time.Now())
 					if lifetime < 2*time.Hour {
-						err = renewOuraSubscription(oauthConfig, &ut, s)
+						err = oura.RenewSubscription(Cfg, &ut, s)
 						if err != nil {
 							log.Printf("can't renew subscription %s/%s/%s: %v",
 								ut.Name, data_type, event_type, err)
@@ -226,7 +125,7 @@ func renewSubscriptions() {
 								return
 							}
 						} else {
-							ut.ReplaceSubscription(s)
+							ut.ReplaceSubscription(*s)
 							log.Printf("renewed %s/%s/%s until %v",
 								ut.Name, data_type, event_type, s.Expiration_time)
 						}
@@ -260,32 +159,47 @@ func main() {
 	flag.Parse()
 	log.Println("=======> start")
 
-	// start a bunch of workers
-
-	observationChan = make(chan observation, 100)
-	go storeObservations()
-	dailyChan = make(chan userToken)
-	go fetchDailiesOnDemand()
-	go pollDailies()
-	eventChan := make(chan eventNotification)
-	go processWebhookEvents(eventChan)
-
 	// set up oauth, which means retrieving the client secrets and the
 	// cached user tokens.
-	var cs clientSecrets
-	parseJsonOrDie(ClientFile, &cs)
-	oauthConfig = &oauth2.Config{
-		RedirectURL:  fmt.Sprintf("%v%v", *BaseUrl, "/code"),
-		ClientID:     cs.ClientID,
-		ClientSecret: cs.ClientSecret,
-		Scopes: []string{"email", "personal", "daily", "heartrate",
-			"workout", "spo2"},
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  "https://cloud.ouraring.com/oauth/authorize",
-			TokenURL: "https://api.ouraring.com/oauth/token",
-		},
-	}
-	parseJsonOrDie(UsersFile, &UserTokens.Tokens)
+	cc := oura.GetClientConfig(*ClientFile)
+	Cfg = &cc
+	Cfg.UserTokens.File = *UsersFile
+	jdump.ParseJsonOrDie(Cfg.UserTokens.File, &Cfg.UserTokens.Tokens)
+
+	// observationChan is the final destination of the processed api
+	// responses, after they have been turned into (metric, value,
+	// timestamp) tuples.
+	observationChan := make(chan oura.Observation, 100)
+	go oura.StoreObservations(Cfg, observationChan)
+
+	// create a channel where anyone can put a UserToken and it will get
+	// all its documents re-searched.  also, chuck all of the UserTokens
+	// into the channel once an hour.
+	pollChan := make(chan oura.UserToken)
+	go func() {
+		for {
+			<-time.After(time.Minute * 60)
+			for _, ut := range Cfg.UserTokens.CopyUserTokens() {
+				pollChan <- ut
+			}
+		}
+	}()
+	go func() {
+		for p := range pollChan {
+			oura.SearchAll(Cfg, &p, observationChan)
+		}
+	}()
+
+	// webhook events are nothing more than notifications that a new
+	// document is ready.  the webhook callback handler will chuck the
+	// incoming document IDs into a channel, and they will be fetched
+	// serially.
+	eventChan := make(chan oura.EventNotification)
+	go func(){
+		for e := range eventChan {
+			oura.ProcessEvent(Cfg, e, observationChan)
+		}
+	}()
 
 	mux := http.NewServeMux()
 	/* bizarre mystery: with a proxy_pass match on /tsbridge/, nginx
@@ -297,17 +211,22 @@ func main() {
 	mux.HandleFunc("/", handleHome)
 	mux.HandleFunc("/home", handleHome)
 	mux.HandleFunc("/newlogin", handleLogin)
-	mux.HandleFunc("/code", handleAuthCode)
-	mux.HandleFunc("/event", handleEvent)
+	mux.HandleFunc("/code", func(w http.ResponseWriter, r *http.Request) {
+		handleAuthCode(w, r, pollChan)
+	})
+	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
+		handleEvent(w, r, eventChan)
+	})
 	srv := startHttp(*ServerAddr, *mux)
 
 	if !*QuietStart {
+		oura.ValidateSubscriptions(Cfg)
 		// start subscriptions -- note that we have to have ListenAndServe()
 		// going first, because of callbacks!
 		renewSubscriptions()
 		// refresh the daily documents
-		for _, ut := range UserTokens.Tokens {
-			dailyChan <- ut
+		for _, ut := range Cfg.UserTokens.Tokens {
+			pollChan <- ut
 		}
 	}
 

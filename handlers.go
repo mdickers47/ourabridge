@@ -1,9 +1,6 @@
 package main
 
 import (
-	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"golang.org/x/oauth2"
@@ -12,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/mdickers47/ourabridge/oura"
 )
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
@@ -38,7 +37,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		// put that in your v8 and smoke it
 	}
 
-	for _, ut := range UserTokens.Tokens {
+	for _, ut := range Cfg.UserTokens.Tokens {
 		io.WriteString(w, "<tr>")
 		thing("td", ut.Name)
 		thing("td", censorEmail(ut.PI.Email))
@@ -73,15 +72,25 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:   state,
 		Expires: time.Now().Add(30 * time.Minute),
 	})
-	url := oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
+	url := Cfg.OauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
 
-func handleAuthCode(w http.ResponseWriter, r *http.Request) {
+func handleAuthCode(w http.ResponseWriter, r *http.Request,
+	pollChan chan<- oura.UserToken) {
+
+	var cookie *http.Cookie
+	var err error
 
 	// validate the nonce which we get back as both a cookie and a form value
-	cookie, _ := r.Cookie("oauthstate")
-	if cookie != nil && r.FormValue("state") != cookie.Value {
+	if cookie, err = r.Cookie("oauthstate"); err != nil {
+		sendError(w, "missing required cookie")
+		return
+	} else if err = cookie.Valid(); err != nil {
+		msg := fmt.Sprintf("oauthstate cookie invalid: %v", err)
+		sendError(w, msg)
+		return
+	} else if r.FormValue("state") != cookie.Value {
 		msg := fmt.Sprintf("state nonce mismatch: cookie %v formvalue %v\n",
 			cookie.Value, r.FormValue("state"))
 		sendError(w, msg)
@@ -97,11 +106,11 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := Cfg.NewContext()
 	defer cancel()
 	log.Printf("starting exchange for username=%s", un)
 	// exchange the "code" for a "token"
-	tok, err := oauthConfig.Exchange(ctx, r.FormValue("code"),
+	tok, err := Cfg.OauthConfig.Exchange(ctx, r.FormValue("code"),
 		oauth2.AccessTypeOffline)
 	if err != nil {
 		sendError(w, fmt.Sprintf("could not exchange code: %v", err))
@@ -110,11 +119,11 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	log.Printf("completed code-token exchange for username=%s", un)
 
 	// populate personal_info, which also tests that the new token works
-	ut := UserTokens.FindByName(un)
+	ut := Cfg.UserTokens.FindByName(un)
 	ut.OauthToken = *tok
-	log.Printf("ut going in is %v", ut)
-	log.Printf("the OauthToken of ut going in is %v", ut.OauthToken)
-	err = doOuraDocRequest(ut, "personal_info", &ut.PI)
+	//log.Printf("ut going in is %v", ut)
+	//log.Printf("the OauthToken of ut going in is %v", ut.OauthToken)
+	err = oura.SearchDocs(Cfg, ut, "personal_info", &ut.PI)
 	if err != nil {
 		sendError(w, fmt.Sprintf("failed to fetch personal_info: %v", err))
 		return
@@ -124,31 +133,36 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	// return a copy of the struct value.  modifying that copy does nothing
 	// to the copy in the map/array.  but you can modify the copy and then
 	// store it back in the map/array.
-	UserTokens.Replace(un, *ut)
+	Cfg.UserTokens.Replace(un, *ut)
 	log.Printf("new token expires %v", ut.OauthToken.Expiry)
 	log.Printf("fetched personal_info for %s: ID %s Email %s",
 		ut.Name, ut.PI.ID, ut.PI.Email)
 	http.Redirect(w, r, "home", http.StatusTemporaryRedirect)
-	dailyChan <- *ut
+	pollChan <- *ut
 }
 
-func handleEvent(w http.ResponseWriter, r *http.Request) {
+func handleEvent(w http.ResponseWriter, r *http.Request,
+	sink chan<- oura.EventNotification) {
 	switch r.Method {
 	case "GET":
 		// this is how they verify that you are listening at subscription
 		// time
 		log.Printf("received subscription verifier request: %s", r.URL.String())
-		if r.FormValue("verification_token") != SubscriptionToken {
-			log.Printf("subscription callback token: got %s, expected %s",
-				r.FormValue("verification_token"), SubscriptionToken)
-			//w.WriteHeader(http.StatusBadRequest)
-			//return
+		if r.FormValue("verification_token") != Cfg.Verifier {
+			msg := fmt.Sprintf("subscription callback token: got %s, expected %s",
+				r.FormValue("verification_token"), Cfg.Verifier)
+			w.WriteHeader(http.StatusBadRequest)
+			writeLogErr(w, msg)
+			return
 		}
 		// our proof of worthiness is to take the string out of the query
 		// parameter, encode it in a json container, and send it back
-		buf, err := json.Marshal(struct{ Challenge string }{
-			Challenge: r.FormValue("challenge"),
-		})
+		buf, err := json.Marshal(
+			struct {
+				Challenge string `json:"challenge"`
+			}{
+				Challenge: r.FormValue("challenge"),
+			})
 		if err != nil {
 			msg := fmt.Sprintf("failed to json-encode challenge: %v", err)
 			log.Println(msg)
@@ -157,13 +171,14 @@ func handleEvent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("returning challenge: %s", buf)
+		w.Header().Set("Content-type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, err = w.Write(buf)
 		if err != nil {
 			log.Printf("can't write to output stream: %v", err)
 		}
 	case "POST":
-		event := eventNotification{}
+		event := oura.EventNotification{}
 		buf, err := io.ReadAll(r.Body)
 		if err != nil {
 			msg := fmt.Sprintf("can't read request body: %s", err)
@@ -181,9 +196,10 @@ func handleEvent(w http.ResponseWriter, r *http.Request) {
 			writeLogErr(w, msg)
 			return
 		}
+		w.Header().Set("Content-type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		writeLogErr(w, "Thanks Chief!")
-		eventChan <- event
+		sink <- event
 	default:
 		log.Printf("weird HTTP method: %s", r.Method)
 		w.WriteHeader(http.StatusBadRequest)

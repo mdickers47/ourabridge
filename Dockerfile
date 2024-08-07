@@ -12,4 +12,4 @@ RUN go build .
 FROM alpine AS prod
 COPY --from=gobuild /opt/ourabridge /opt/ourabridge
 WORKDIR /opt
-CMD exec /opt/ourabridge -graphite $GRAPHITE_SRV
+CMD ["/opt/ourabridge"]

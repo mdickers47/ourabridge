@@ -1,7 +1,6 @@
 package oura
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -17,52 +16,51 @@ type Observation struct {
 	Value     float32
 }
 
-var observationChan chan Observation
-var GraphiteSrv = flag.String("graphite", "", "Address of graphite server")
-
-func storeObservations(cfg *ClientConfig) {
-	var local    io.Writer
+func StoreObservations(cfg *ClientConfig, src chan Observation) {
+	var local    *os.File
 	var graphite net.Conn
+	var have_local, have_graphite bool
 	var err      error
 
 	if len(cfg.LocalDataLog) > 0 {
-		local, err := os.OpenFile(cfg.LocalDataLog,
+		local, err = os.OpenFile(cfg.LocalDataLog,
 			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			log.Fatalf("can't open log file: %v", err)
 		}
 		defer local.Close()
+		log.Printf("observations logged to local file %s", cfg.LocalDataLog)
+		have_local = true
 	}
 
 	if len(cfg.GraphiteServer) > 0 {
-		graphite, err = net.Dial("tcp", *GraphiteSrv)
+		graphite, err = net.Dial("tcp", cfg.GraphiteServer)
 		if err != nil {
 			log.Fatalf("can't connect to graphite server: %s", err)
 		}
-		log.Printf("connected to graphite line receiver at %s", *GraphiteSrv)
+		log.Printf("connected to graphite line receiver at %s", cfg.GraphiteServer)
+		have_graphite = true
 	}
 
-	if local == nil && graphite == nil {
+	if !(have_local || have_graphite) {
 		log.Fatalf("neither local log file nor graphite server is provided")
 	}
 
-	for obs := range observationChan {
+	for obs := range src {
 		line := fmt.Sprintf("%s%s.%s %f %d\n",
 			cfg.GraphitePrefix,
 			obs.Username,
 			obs.Field,
 			obs.Value,
 			obs.Timestamp.Unix())
-		if local != nil {
-			_, err = io.WriteString(local, line)
-			if err != nil {
+		if have_local {
+			if _, err = io.WriteString(local, line); err != nil {
 				// if we are unable to record the observations, it is best to die
 				log.Fatalf("can't write to log file: %v", err)
 			}
 		}
-		if graphite != nil {
-			_, err = io.WriteString(graphite, line)
-			if err != nil {
+		if have_graphite {
+			if _, err = io.WriteString(graphite, line); err != nil {
 				log.Fatalf("can't write to graphite server: %v", err)
 			}
 		}

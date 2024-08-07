@@ -4,14 +4,13 @@ import (
 	"context"
 	"golang.org/x/oauth2"
 	"net/http"
-	"sync"
 	"time"
 	"log"
 
 	"github.com/mdickers47/ourabridge/jdump"
 )
 
-type userToken struct {
+type UserToken struct {
 	Name          string
 	PI            personalInfo
 	OauthToken    oauth2.Token
@@ -19,7 +18,7 @@ type userToken struct {
 	LastPoll      time.Time
 }
 
-func (ut *userToken) CensorToken() string {
+func (ut *UserToken) CensorToken() string {
 	tok := "none"
 	if len(ut.OauthToken.AccessToken) >= 5 {
 		tok = ut.OauthToken.AccessToken[:5]
@@ -27,7 +26,7 @@ func (ut *userToken) CensorToken() string {
 	return tok
 }
 
-func (ut *userToken) GetSubscription(data_type string,
+func (ut *UserToken) GetSubscription(data_type string,
 	event_type string) (int, *subResponse) {
 	for i, s := range ut.Subscriptions {
 		if s.Data_type == data_type && s.Event_type == event_type {
@@ -37,7 +36,7 @@ func (ut *userToken) GetSubscription(data_type string,
 	return -1, nil
 }
 
-func (ut *userToken) ReplaceSubscription(new *subResponse) {
+func (ut *UserToken) ReplaceSubscription(new subResponse) {
 	idx, _ := ut.GetSubscription(new.Data_type, new.Event_type)
 	if idx >= 0 {
 		// this oddity is claimed to be the idiomatic Go way to delete something
@@ -45,10 +44,10 @@ func (ut *userToken) ReplaceSubscription(new *subResponse) {
 		ut.Subscriptions = append(ut.Subscriptions[:idx],
 			ut.Subscriptions[idx+1:]...)
 	}
-	ut.Subscriptions = append(ut.Subscriptions, *new)
+	ut.Subscriptions = append(ut.Subscriptions, new)
 }
 
-func (ut *userToken) HttpClient(cfg *ClientConfig) (*http.Client,
+func (ut *UserToken) HttpClient(cfg *ClientConfig) (*http.Client,
 	context.CancelFunc) {
 	// We can't use the library supplied Client() because it has a cool
 	// behavior where it refreshes the token silently and gives you no
@@ -59,8 +58,9 @@ func (ut *userToken) HttpClient(cfg *ClientConfig) (*http.Client,
 		ut.CensorToken())
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	ts := NonBrokenTokenSource{
-			tokensource: cfg.OauthConfig.TokenSource(ctx, &ut.OauthToken),
-			username:    ut.Name,
+		tokensource: cfg.OauthConfig.TokenSource(ctx, &ut.OauthToken),
+		username:    ut.Name,
+		tokenset:    &cfg.UserTokens,
 	}		
 	c := oauth2.NewClient(ctx, ts)
 	return c, cancel
@@ -75,6 +75,7 @@ func (ut *userToken) HttpClient(cfg *ClientConfig) (*http.Client,
 type NonBrokenTokenSource struct {
 	tokensource oauth2.TokenSource
 	username    string
+	tokenset    *UserTokenSet
 }
 
 func (nbts NonBrokenTokenSource) Token() (*oauth2.Token, error) {
@@ -85,70 +86,15 @@ func (nbts NonBrokenTokenSource) Token() (*oauth2.Token, error) {
 	if err == nil && tok == nil {
 		log.Printf("somehow tok is nil and error is nil")
 	}
-	ut := UserTokens.FindByName(nbts.username)
+	ut := nbts.tokenset.FindByName(nbts.username)
 	if tok.AccessToken != ut.OauthToken.AccessToken {
 		log.Printf("caught an oauth token refresh for %s, new AccessToken is %s",
 			ut.Name, tok.AccessToken[:5])
 		// this is a failsafe until I understand why we are losing the new token
 		jdump.DumpJsonOrDie("debug_new_token.json", tok)
 		ut.OauthToken = *tok
-		UserTokens.Replace(nbts.username, *ut)
+		nbts.tokenset.Replace(nbts.username, *ut)
 	}
 	return tok, err
 }			
 
-// a userTokenSet is a container for a bunch of userTokens that you
-// should only access through its methods, in order to be thread safe.
-type UserTokenSet struct {
-	Tokens map[string]userToken
-	Lock   sync.Mutex
-	File   string
-}
-
-// this is the global data structure that we will use anywhere it is
-// convenient lol
-var UserTokens UserTokenSet
-
-func (set *UserTokenSet) FindById(id string) *userToken {
-	for _, i := range set.Tokens {
-		if i.PI.ID == id {
-			return &i
-		}
-	}
-	return nil
-}
-
-func (set *UserTokenSet) FindByName(name string) *userToken {
-	// probably overkill but maybe this implementation changes
-	// some day
-	ut, ok := set.Tokens[name]
-	if !ok {
-		return nil
-	} else {
-		return &ut
-	}
-}
-
-func (set *UserTokenSet) Replace(name string, ut userToken) {
-	set.Lock.Lock()
-	defer set.Lock.Unlock()
-	set.Tokens[name] = ut
-	jdump.DumpJsonOrDie(set.File, set.Tokens)
-	log.Printf("updated and saved token for %s: %s", name, ut.CensorToken())
-}
-
-func (set *UserTokenSet) Save() {
-	set.Lock.Lock()
-	defer set.Lock.Unlock()
-	jdump.DumpJsonOrDie(set.File, set.Tokens)
-}
-
-func (set *UserTokenSet) CopyUserTokens() []userToken {
-	set.Lock.Lock()
-	defer set.Lock.Unlock()
-	uts := make([]userToken, 0, len(set.Tokens))
-	for _, value := range set.Tokens {
-		uts = append(uts, value)
-	}
-	return uts
-}
