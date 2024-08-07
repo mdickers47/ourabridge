@@ -39,6 +39,15 @@ type activityResponse struct {
 	Next_token string
 }
 
+// a substructure that appears repeatedly when they want to give you
+// something in a 1-minly array but only want to include it in a
+// daily document for some reason
+type intervalMetric struct {
+	Interval  float32
+	Items     []float32
+	Timestamp time.Time
+}
+
 type dailyActivity struct {
 	ID                          string
 	Class_5_min                 string
@@ -54,22 +63,18 @@ type dailyActivity struct {
 	Low_activity_time           int
 	Medium_activity_met_minutes int
 	Medium_activity_time        int
-	Met                         struct {
-		Interval  float32
-		Items     []float32
-		Timestamp time.Time
-	}
-	Meters_to_target      int
-	Non_wear_time         int
-	Resting_time          int
-	Sedentary_met_minutes int
-	Sedentary_time        int
-	Steps                 int
-	Target_calories       int
-	Target_meters         int
-	Total_calories        int
-	Day                   string
-	Timestamp             time.Time
+	Met                         intervalMetric
+	Meters_to_target            int
+	Non_wear_time               int
+	Resting_time                int
+	Sedentary_met_minutes       int
+	Sedentary_time              int
+	Steps                       int
+	Target_calories             int
+	Target_meters               int
+	Total_calories              int
+	Day                         string
+	Timestamp                   time.Time
 }
 
 type resilienceResponse struct {
@@ -113,16 +118,8 @@ type sleepPeriod struct {
 	Day                 string
 	Deep_sleep_duration int
 	Efficiency          int
-	Heart_rate          struct {
-		Interval  float32
-		Items     []float32
-		Timestamp time.Time
-	}
-	Hrv struct {
-		Interval  float32
-		Items     []float32
-		Timestamp time.Time
-	}
+	Heart_rate          intervalMetric
+	Hrv                 intervalMetric
 	Latency              int
 	Light_sleep_duration int
 	Low_battery_alert    bool

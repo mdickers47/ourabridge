@@ -58,6 +58,39 @@ func process[T Doc](err error, doclist []T, ut *UserToken,
 	return sent_count
 }
 
+func doGet(cfg *ClientConfig, ut *UserToken, ouraurl string, pDest any) error {
+
+	if len(ut.OauthToken.AccessToken) == 0 {
+		return fmt.Errorf("no access token for %s", ut.Name)
+	}
+
+	client, cancel := ut.HttpClient(cfg)
+	defer cancel()
+	log.Printf("doing GET %s", ouraurl)
+	res, err := client.Get(ouraurl)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if !isSuccess(res.StatusCode) {
+		body, _ := io.ReadAll(res.Body)
+		log.Printf("error %d response was %s", res.StatusCode, body)
+		return fmt.Errorf("http response code was %v", res.StatusCode)
+	}
+	buf, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(buf, pDest)
+	if err != nil {
+		log.Printf("unparseable response is: %s", buf)
+		return err
+	}
+
+	return nil
+}
+
 func GetDocByID(cfg *ClientConfig, ut *UserToken, endpoint string,
 	id string, pDest any) error {
 	ouraurl := cfg.OuraPath("/usercollection/" + endpoint + "/" + id)
@@ -104,39 +137,6 @@ func SearchDocs(cfg *ClientConfig, ut *UserToken, endpoint string,
 	return doGet(cfg, ut, ouraurl.String(), pDest)
 }
 
-func doGet(cfg *ClientConfig, ut *UserToken, ouraurl string, pDest any) error {
-
-	if len(ut.OauthToken.AccessToken) == 0 {
-		return fmt.Errorf("no access token for %s", ut.Name)
-	}
-
-	client, cancel := ut.HttpClient(cfg)
-	defer cancel()
-	log.Printf("doing GET %s", ouraurl)
-	res, err := client.Get(ouraurl)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if !isSuccess(res.StatusCode) {
-		body, _ := io.ReadAll(res.Body)
-		log.Printf("error %d response was %s", res.StatusCode, body)
-		return fmt.Errorf("http response code was %v", res.StatusCode)
-	}
-	buf, err := io.ReadAll(res.Body)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(buf, pDest)
-	if err != nil {
-		log.Printf("unparseable response is: %s", buf)
-		return err
-	}
-
-	return nil
-}
-
 func RandomString() string {
 	nonce := make([]byte, 18)
 	rand.Read(nonce)
@@ -147,31 +147,65 @@ func RandomString() string {
 
 func SendDoc[T Doc](doc T, username string, sink chan<- Observation) int {
 	sent_count := 0
-	send := func(k string, v float32) {
+	send_ts := func(k string, v float32, t time.Time) {
 		sink <- Observation{
-			Timestamp: doc.GetTimestamp(),
+			Timestamp: t,
 			Username:  username,
 			Field:     fmt.Sprintf("%s.%s", doc.GetMetricPrefix(), k),
 			Value:     v,
 		}
 		sent_count += 1
 	}
+	send := func(k string, v float32) {
+		send_ts(k, v, doc.GetTimestamp())
+	}
 	s := reflect.ValueOf(&doc).Elem()
 	typeOfDoc := s.Type()
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
 		metric_name := strings.ToLower(typeOfDoc.Field(i).Name)
+		// some types that we can always handle the same way
 		switch f.Type().Name() {
 		case "int":
 			send(metric_name, float32(f.Interface().(int)))
 		case "float32":
 			send(metric_name, f.Interface().(float32))
+		case "intervalMetric":
+			im := f.Interface().(intervalMetric)
+			for i, v := range im.Items {
+				t := im.Timestamp.Add(
+					time.Duration(float32(i)*im.Interval) * time.Second)
+				// these timeseries contain 'null' which go parses as 0; luckily it
+				// will never be a valid heart_rate or hrv or met
+				if v > 0.0 {
+					send_ts(metric_name, v, t)
+				}
+			}
 		}
-		if metric_name == "contributors" {
+		// special oddball cases
+		switch metric_name {
+		case "contributors":
 			for k, v := range f.Interface().(map[string]int) {
 				send(fmt.Sprintf("contrib.%s", strings.ToLower(k)), float32(v))
 			}
+		case "movement_30_sec":
+			s := f.Interface().(string)
+			// GetTimestamp() returns bedtime_end on sleepPeriod, but we can find
+			// bedtime_start anyway
+			t0 := doc.GetTimestamp().Add(time.Duration(-30*len(s)) * time.Second)
+			for i := 0; i < len(s); i++ {
+				send_ts(metric_name, float32(s[i]-48),
+					t0.Add(time.Duration(30*i)*time.Second))
+			}
+		case "sleep_phase_5_min":
+			s := f.Interface().(string)
+			t0 := doc.GetTimestamp().Add(time.Duration(-300*len(s)) * time.Second)
+			for i := 0; i < len(s); i++ {
+				send_ts(metric_name, float32(s[i]-48),
+					t0.Add(time.Duration(300*i)*time.Second))
+			}
 		}
+
 	}
 	return sent_count
 }
