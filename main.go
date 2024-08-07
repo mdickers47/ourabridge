@@ -14,14 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mdickers47/ourabridge/jdump"
 	"github.com/mdickers47/ourabridge/oura"
 )
 
 var QuietStart = flag.Bool("quietstart", false,
 	"Don't send any requests to Oura API at startup")
-var ServerAddr = flag.String("addr", ":8000",
-	"Address for listen socket")
+
 /*
 var TlsKey = flag.String("tlspem", "privkey.pem",
 	"Path to private key PEM file")
@@ -31,8 +29,6 @@ var TlsCert = flag.String("tlscert", "cert.pem",
 
 var ClientFile = flag.String("clientsecrets", "client_creds.json",
 	"Path to JSON file containing oauth2 ClientID and ClientSecret")
-var UsersFile = flag.String("usertokens", "user_creds.json",
-	"Path to JSON file containing list of user tokens")
 
 // this is a singleton object that basically all of the code will want
 // to access, so a global variable is no worse than passing a
@@ -85,57 +81,6 @@ func validateUsername(n string, claim bool) string {
 	return ""
 }
 
-func renewSubscriptions() {
-	// run through all the userTokens and all the data types and create
-	// or renew any missing subscriptions.  we stop trying after 3
-	// failures because it appears that if you fail too much, you will
-	// piss off cloudfront on oura's side and get locked out.
-	var err error
-	err_count := 0
-	for _, ut := range Cfg.UserTokens.Tokens {
-		for _, data_type := range []string{"daily_activity", "daily_readiness",
-			"daily_sleep", "sleep"} {
-			for _, event_type := range []string{"create", "update"} {
-				_, s := ut.GetSubscription(data_type, event_type)
-				if s == nil {
-					s, err = oura.CreateSubscription(Cfg, &ut, event_type, data_type)
-					if err != nil {
-						log.Printf("can't create subscription %s/%s/%s: %v",
-							ut.Name, data_type, event_type, err)
-						if err_count += 1; err_count > 2 {
-							log.Printf("giving up on subscriptions")
-							return
-						}
-					} else {
-						ut.ReplaceSubscription(*s)
-						log.Printf("subscribed to %s/%s/%s expiring %s",
-							ut.Name, data_type, event_type, time.Time(s.Expiration_time))
-					}
-				} else {
-					// there is already a subscription, let's see if it is expiring
-					// soon
-					lifetime := time.Time(s.Expiration_time).Sub(time.Now())
-					if lifetime < 2*time.Hour {
-						err = oura.RenewSubscription(Cfg, &ut, s)
-						if err != nil {
-							log.Printf("can't renew subscription %s/%s/%s: %v",
-								ut.Name, data_type, event_type, err)
-							if err_count += 1; err_count > 2 {
-								log.Printf("giving up on subscriptions")
-								return
-							}
-						} else {
-							ut.ReplaceSubscription(*s)
-							log.Printf("renewed %s/%s/%s until %s",
-								ut.Name, data_type, event_type, time.Time(s.Expiration_time))
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
 func startHttp(addr string, mux http.ServeMux) *http.Server {
 	// a corny way to get http.Server to log requests
 	logger := http.HandlerFunc(
@@ -155,16 +100,44 @@ func startHttp(addr string, mux http.ServeMux) *http.Server {
 	return srv
 }
 
+func poll(sink chan<- oura.UserToken) {
+	i := 0
+	for {
+		<-time.After(time.Minute * 60)
+		for _, ut := range Cfg.UserTokens.CopyUserTokens() {
+			sink <- ut
+		}
+		if i += 1; i%10 == 0 {
+			oura.ValidateSubscriptions(Cfg)
+		}
+	}
+}
+
+func sigHandler(source <-chan os.Signal, sink chan<- oura.UserToken) {
+	for sig := range source {
+		switch sig {
+		case syscall.SIGHUP:
+			log.Printf("received SIGHUP, rereading config files and reopening logs")
+			*Cfg = oura.LoadClientConfig(*ClientFile)
+			Cfg.Reconnect = true
+		case syscall.SIGUSR1:
+			log.Printf("received SIGUSR1, re-polling documents and subscriptions")
+			oura.ValidateSubscriptions(Cfg)
+			for _, ut := range Cfg.UserTokens.CopyUserTokens() {
+				sink <- ut
+			}
+		}
+	}
+}
+
 func main() {
 	flag.Parse()
 	log.Println("=======> start")
 
 	// set up oauth, which means retrieving the client secrets and the
 	// cached user tokens.
-	cc := oura.GetClientConfig(*ClientFile)
+	cc := oura.LoadClientConfig(*ClientFile)
 	Cfg = &cc
-	Cfg.UserTokens.File = *UsersFile
-	jdump.ParseJsonOrDie(Cfg.UserTokens.File, &Cfg.UserTokens.Tokens)
 
 	// observationChan is the final destination of the processed api
 	// responses, after they have been turned into (metric, value,
@@ -173,17 +146,8 @@ func main() {
 	go oura.StoreObservations(Cfg, observationChan)
 
 	// create a channel where anyone can put a UserToken and it will get
-	// all its documents re-searched.  also, chuck all of the UserTokens
-	// into the channel once an hour.
+	// all its documents re-searched.
 	pollChan := make(chan oura.UserToken)
-	go func() {
-		for {
-			<-time.After(time.Minute * 60)
-			for _, ut := range Cfg.UserTokens.CopyUserTokens() {
-				pollChan <- ut
-			}
-		}
-	}()
 	go func() {
 		for p := range pollChan {
 			oura.SearchAll(Cfg, &p, observationChan)
@@ -195,7 +159,7 @@ func main() {
 	// incoming document IDs into a channel, and they will be fetched
 	// serially.
 	eventChan := make(chan oura.EventNotification)
-	go func(){
+	go func() {
 		for e := range eventChan {
 			oura.ProcessEvent(Cfg, e, observationChan)
 		}
@@ -217,20 +181,27 @@ func main() {
 	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
 		handleEvent(w, r, eventChan)
 	})
-	srv := startHttp(*ServerAddr, *mux)
+	srv := startHttp(Cfg.ListenAddr, *mux)
 
 	if !*QuietStart {
-		oura.ValidateSubscriptions(Cfg)
 		// start subscriptions -- note that we have to have ListenAndServe()
 		// going first, because of callbacks!
-		renewSubscriptions()
+		oura.ValidateSubscriptions(Cfg)
 		// refresh the daily documents
 		for _, ut := range Cfg.UserTokens.Tokens {
 			pollChan <- ut
 		}
 	}
 
-	// wait for a SIGINT or SIGTERM
+	// periodically run document searches and refresh subscriptions
+	go poll(pollChan)
+
+	// handle SIGHUP and SIGUSR1
+	sigChan := make(chan os.Signal, 1)
+	go sigHandler(sigChan, pollChan)
+	signal.Notify(sigChan, syscall.SIGHUP, syscall.SIGUSR1)
+
+	// WAIT HERE for a SIGINT or SIGTERM
 	bye := make(chan os.Signal, 1)
 	signal.Notify(bye, syscall.SIGINT, syscall.SIGTERM)
 	<-bye

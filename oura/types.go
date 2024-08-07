@@ -1,8 +1,6 @@
 package oura
 
 import (
-	"encoding/json"
-	"strings"
 	"time"
 )
 
@@ -167,41 +165,6 @@ type EventNotification struct {
 	Object_id  string
 	Event_time time.Time
 	User_id    string
-}
-
-// in only these webhook structures, timestamps are given in a nonstandard
-// format that go cannot parse by default.
-
-type weirdTime time.Time
-
-type subRequest struct {
-	Callback_url       string `json:"callback_url"`
-	Event_type         string `json:"event_type"`
-	Data_type          string `json:"data_type"`
-	Verification_token string `json:"verification_token"`
-}
-
-type subResponse struct {
-	ID                 string    `json:"id"`
-	Callback_url       string    `json:"callback_url"`
-	Event_type         string    `json:"event_type"`
-	Data_type          string    `json:"data_type"`
-	Verification_token string    `json:"verification_token,omitempty"`
-	Expiration_time    weirdTime `json:"expiration_time,omitempty"`
-}
-
-func (t *weirdTime) UnmarshalJSON(b []byte) error {
-	s := strings.Trim(string(b), "\"")
-	ts, err := time.Parse("2006-01-02T15:04:05", s)
-	if err != nil {
-		return err
-	}
-	*t = weirdTime(ts)
-	return nil
-}
-
-func (t weirdTime) MarshalJSON() ([]byte, error) {
-	return json.Marshal(time.Time(t))
 }
 
 /* this is corny, but seems to be what you have to do to take
