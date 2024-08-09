@@ -71,7 +71,7 @@ func validateUsername(n string, claim bool) string {
 	} else if strings.Index(n, ".") >= 0 {
 		return "username cannot contain ."
 	}
-	if Cfg.UserTokens.FindByName(n) != nil {
+	if Cfg.UserTokens.NameIsTaken(n) {
 		return "username is taken"
 	}
 	if claim {
@@ -100,12 +100,12 @@ func startHttp(addr string, mux http.ServeMux) *http.Server {
 	return srv
 }
 
-func poll(sink chan<- oura.UserToken) {
+func poll(sink chan<- string) {
 	i := 0
 	for {
 		<-time.After(time.Minute * 60)
 		for _, ut := range Cfg.UserTokens.CopyUserTokens() {
-			sink <- ut
+			sink <- ut.Name
 		}
 		if i += 1; i%10 == 0 {
 			oura.ValidateSubscriptions(Cfg)
@@ -113,7 +113,7 @@ func poll(sink chan<- oura.UserToken) {
 	}
 }
 
-func sigHandler(source <-chan os.Signal, sink chan<- oura.UserToken) {
+func sigHandler(source <-chan os.Signal, sink chan<- string) {
 	for sig := range source {
 		switch sig {
 		case syscall.SIGHUP:
@@ -124,7 +124,7 @@ func sigHandler(source <-chan os.Signal, sink chan<- oura.UserToken) {
 			log.Printf("received SIGUSR1, re-polling documents and subscriptions")
 			oura.ValidateSubscriptions(Cfg)
 			for _, ut := range Cfg.UserTokens.CopyUserTokens() {
-				sink <- ut
+				sink <- ut.Name
 			}
 		}
 	}
@@ -145,12 +145,12 @@ func main() {
 	observationChan := make(chan oura.Observation, 100)
 	go oura.StoreObservations(Cfg, observationChan)
 
-	// create a channel where anyone can put a UserToken and it will get
+	// create a channel where anyone can put a username and it will get
 	// all its documents re-searched.
-	pollChan := make(chan oura.UserToken)
+	pollChan := make(chan string)
 	go func() {
 		for p := range pollChan {
-			oura.SearchAll(Cfg, &p, observationChan)
+			oura.SearchAll(Cfg, p, observationChan)
 		}
 	}()
 
@@ -188,8 +188,8 @@ func main() {
 		// going first, because of callbacks!
 		oura.ValidateSubscriptions(Cfg)
 		// refresh the daily documents
-		for _, ut := range Cfg.UserTokens.Tokens {
-			pollChan <- ut
+		for _, ut := range Cfg.UserTokens.CopyUserTokens() {
+			pollChan <- ut.Name
 		}
 	}
 

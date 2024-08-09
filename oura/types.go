@@ -10,7 +10,7 @@ type Doc interface {
 	GetMetricPrefix() string
 }
 
-type personalInfo struct {
+type PersonalInfo struct {
 	ID             string
 	Age            int
 	Weight         float32
@@ -108,18 +108,18 @@ type sleepPeriodResponse struct {
 }
 
 type sleepPeriod struct {
-	ID                  string
-	Average_breath      float32
-	Average_heart_rate  float32
-	Average_hrv         int
-	Awake_time          int
-	Bedtime_end         time.Time
-	Bedtime_start       time.Time
-	Day                 string
-	Deep_sleep_duration int
-	Efficiency          int
-	Heart_rate          intervalMetric
-	Hrv                 intervalMetric
+	ID                   string
+	Average_breath       float32
+	Average_heart_rate   float32
+	Average_hrv          int
+	Awake_time           int
+	Bedtime_end          time.Time
+	Bedtime_start        time.Time
+	Day                  string
+	Deep_sleep_duration  int
+	Efficiency           int
+	Heart_rate           intervalMetric
+	Hrv                  intervalMetric
 	Latency              int
 	Light_sleep_duration int
 	Low_battery_alert    bool
@@ -190,15 +190,6 @@ func (ds dailySleep) GetTimestamp() time.Time {
 
 func (ds dailySleep) GetMetricPrefix() string {
 	return "sleep"
-}
-
-func (pi personalInfo) GetTimestamp() time.Time {
-	// this is cheating; this document does not include timestamp
-	return time.Now()
-}
-
-func (pi personalInfo) GetMetricPrefix() string {
-	return "info"
 }
 
 func (sp sleepPeriod) GetTimestamp() time.Time {

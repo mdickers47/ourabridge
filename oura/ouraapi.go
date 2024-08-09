@@ -41,7 +41,7 @@ func validResponseBody(res *http.Response) ([]byte, error) {
 	return body, nil
 }
 
-func process[T Doc](err error, doclist []T, ut *UserToken,
+func process[T Doc](err error, doclist []T, name string,
 	sink chan<- Observation) int {
 	if err != nil {
 		log.Printf("document search failed: %s", err)
@@ -51,20 +51,16 @@ func process[T Doc](err error, doclist []T, ut *UserToken,
 		// I tried to use document timestamps to avoid saving duplicate
 		// observations, but it doesn't work without getting complicated,
 		// because documents arrive with back-dated timestamps.
-		sent_count += SendDoc(doc, ut.Name, sink)
+		sent_count += SendDoc(doc, name, sink)
 	}
 	log.Printf("retrieved %d documents for %d observations",
 		len(doclist), sent_count)
 	return sent_count
 }
 
-func doGet(cfg *ClientConfig, ut *UserToken, ouraurl string, pDest any) error {
+func doGet(cfg *ClientConfig, user string, ouraurl string, pDest any) error {
 
-	if len(ut.OauthToken.AccessToken) == 0 {
-		return fmt.Errorf("no access token for %s", ut.Name)
-	}
-
-	client, cancel := ut.HttpClient(cfg)
+	client, cancel := cfg.OauthClient(user)
 	defer cancel()
 	log.Printf("doing GET %s", ouraurl)
 	res, err := client.Get(ouraurl)
@@ -91,40 +87,39 @@ func doGet(cfg *ClientConfig, ut *UserToken, ouraurl string, pDest any) error {
 	return nil
 }
 
-func GetDocByID(cfg *ClientConfig, ut *UserToken, endpoint string,
+func GetDocByID(cfg *ClientConfig, user string, endpoint string,
 	id string, pDest any) error {
 	ouraurl := cfg.OuraPath("/usercollection/" + endpoint + "/" + id)
-	return doGet(cfg, ut, ouraurl.String(), pDest)
+	return doGet(cfg, user, ouraurl.String(), pDest)
 }
 
-func SearchAll(cfg *ClientConfig, ut *UserToken, sink chan<- Observation) {
+func SearchAll(cfg *ClientConfig, name string, sink chan<- Observation) {
 	dr := readinessResponse{}
-	err := SearchDocs(cfg, ut, "daily_readiness", &dr)
-	process(err, dr.Data, ut, sink)
+	err := SearchDocs(cfg, name, "daily_readiness", &dr)
+	process(err, dr.Data, name, sink)
 	da := activityResponse{}
-	err = SearchDocs(cfg, ut, "daily_activity", &da)
-	process(err, da.Data, ut, sink)
+	err = SearchDocs(cfg, name, "daily_activity", &da)
+	process(err, da.Data, name, sink)
 	ds := sleepResponse{}
-	err = SearchDocs(cfg, ut, "daily_sleep", &ds)
-	process(err, ds.Data, ut, sink)
+	err = SearchDocs(cfg, name, "daily_sleep", &ds)
+	process(err, ds.Data, name, sink)
 	dp := sleepPeriodResponse{}
-	err = SearchDocs(cfg, ut, "sleep", &dp)
-	process(err, dp.Data, ut, sink)
+	err = SearchDocs(cfg, name, "sleep", &dp)
+	process(err, dp.Data, name, sink)
 	hr := heartrateResponse{}
-	err = SearchDocs(cfg, ut, "heartrate", &hr)
-	process(err, hr.Data, ut, sink)
-	ut.LastPoll = time.Now()
-	cfg.UserTokens.Replace(ut.Name, *ut)
+	err = SearchDocs(cfg, name, "heartrate", &hr)
+	process(err, hr.Data, name, sink)
+	cfg.UserTokens.Touch(name)
 }
 
-func SearchDocs(cfg *ClientConfig, ut *UserToken, endpoint string,
+func SearchDocs(cfg *ClientConfig, name string, endpoint string,
 	pDest any) error {
 	ts := func(d time.Duration) string {
 		// go time.Format is odd
 		return time.Now().Add(d).Format("2006-01-02")
 	}
 	backfill_days := 1
-	if ut.LastPoll.IsZero() {
+	if cfg.UserTokens.IsNew(name) {
 		// if we have never seen you before, start by searching backwards
 		// 7 days
 		backfill_days = 7
@@ -134,7 +129,7 @@ func SearchDocs(cfg *ClientConfig, ut *UserToken, endpoint string,
 	params.Add("end_date", ts(+24*time.Hour))
 	ouraurl := cfg.OuraPath("/usercollection/" + endpoint)
 	ouraurl.RawQuery = params.Encode()
-	return doGet(cfg, ut, ouraurl.String(), pDest)
+	return doGet(cfg, name, ouraurl.String(), pDest)
 }
 
 func RandomString() string {

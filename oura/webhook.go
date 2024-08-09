@@ -96,43 +96,44 @@ func RenewSubscription(cfg *ClientConfig, sub *subResponse) error {
 
 func ProcessEvent(cfg *ClientConfig, event EventNotification,
 	sink chan<- Observation) {
-	ut := cfg.UserTokens.FindById(event.User_id)
 
-	if ut == nil {
-		log.Printf("webhook notification for unknown user %s", event.User_id)
+	user, err := cfg.UserTokens.FindNameById(event.User_id)
+	if err != nil {
+		log.Printf("webhook notification for unknown userid %s", event.User_id)
 		return
 	}
+
 	log.Printf("received webhook notification for %s/%s/%s",
-		ut.Name, event.Event_type, event.Data_type)
+		user, event.Event_type, event.Data_type)
 	if event.Event_type == "update" || event.Event_type == "create" {
 		// the other possible Event_type is "delete" and there is nothing we
 		// can do with that.
 		var err error
-		var i   int
+		var i int
 		switch event.Data_type {
 		case "daily_activity":
 			da := dailyActivity{}
-			err = GetDocByID(cfg, ut, "daily_activity", event.Object_id, &da)
+			err = GetDocByID(cfg, user, "daily_activity", event.Object_id, &da)
 			if err == nil {
-				i = SendDoc(da, ut.Name, sink)
+				i = SendDoc(da, user, sink)
 			}
 		case "daily_readiness":
 			dr := dailyReadiness{}
-			err = GetDocByID(cfg, ut, "daily_readiness", event.Object_id, &dr)
+			err = GetDocByID(cfg, user, "daily_readiness", event.Object_id, &dr)
 			if err == nil {
-				i = SendDoc(dr, ut.Name, sink)
+				i = SendDoc(dr, user, sink)
 			}
 		case "daily_sleep":
 			ds := dailySleep{}
-			err = GetDocByID(cfg, ut, "daily_sleep", event.Object_id, &ds)
+			err = GetDocByID(cfg, user, "daily_sleep", event.Object_id, &ds)
 			if err == nil {
-				i = SendDoc(ds, ut.Name, sink)
+				i = SendDoc(ds, user, sink)
 			}
 		case "sleep":
 			sp := sleepPeriod{}
-			err = GetDocByID(cfg, ut, "sleep", event.Object_id, &sp)
+			err = GetDocByID(cfg, user, "sleep", event.Object_id, &sp)
 			if err == nil {
-				i = SendDoc(sp, ut.Name, sink)
+				i = SendDoc(sp, user, sink)
 			}
 		default:
 			// unhandled types include:
@@ -146,6 +147,7 @@ func ProcessEvent(cfg *ClientConfig, event EventNotification,
 		} else {
 			log.Printf("%s document id=%s processed for %d observations",
 				event.Data_type, event.Object_id, i)
+			cfg.UserTokens.Touch(user)
 		}
 	}
 }

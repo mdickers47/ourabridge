@@ -37,14 +37,14 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		// put that in your v8 and smoke it
 	}
 
-	for _, ut := range Cfg.UserTokens.Tokens {
+	for _, ut := range Cfg.UserTokens.CopyUserTokens() {
 		io.WriteString(w, "<tr>")
 		thing("td", ut.Name)
 		thing("td", censorEmail(ut.PI.Email))
 		thing("td", ut.OauthToken.Expiry.Format(time.RFC3339))
 		thing("td", dur(ut.OauthToken.Expiry))
-		thing("td", ut.LastPoll.Format(time.RFC3339))
-		thing("td", dur(ut.LastPoll))
+		thing("td", ut.LastUse.Format(time.RFC3339))
+		thing("td", dur(ut.LastUse))
 		io.WriteString(w, "</tr>")
 	}
 	io.WriteString(w, "</table>")
@@ -77,7 +77,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAuthCode(w http.ResponseWriter, r *http.Request,
-	pollChan chan<- oura.UserToken) {
+	pollChan chan<- string) {
 
 	var cookie *http.Cookie
 	var err error
@@ -120,12 +120,14 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request,
 	}
 	log.Printf("completed code-token exchange for username=%s", un)
 
-	// populate personal_info, which also tests that the new token works
-	ut := Cfg.UserTokens.FindByName(un)
-	ut.OauthToken = *tok
-	//log.Printf("ut going in is %v", ut)
-	//log.Printf("the OauthToken of ut going in is %v", ut.OauthToken)
-	err = oura.SearchDocs(Cfg, ut, "personal_info", &ut.PI)
+	// store the new oauth token
+	log.Printf("new token expires %v", tok.Expiry)
+	Cfg.UserTokens.UpdateOauthToken(un, *tok)
+
+	// populate personal_info, which we need, and also tests if the token
+	// works
+	pi := oura.PersonalInfo{}
+	err = oura.SearchDocs(Cfg, un, "personal_info", &pi)
 	if err != nil {
 		sendError(w, fmt.Sprintf("failed to fetch personal_info: %v", err))
 		return
@@ -135,12 +137,11 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request,
 	// return a copy of the struct value.  modifying that copy does nothing
 	// to the copy in the map/array.  but you can modify the copy and then
 	// store it back in the map/array.
-	Cfg.UserTokens.Replace(un, *ut)
-	log.Printf("new token expires %v", ut.OauthToken.Expiry)
 	log.Printf("fetched personal_info for %s: ID %s Email %s",
-		ut.Name, ut.PI.ID, ut.PI.Email)
+		un, pi.ID, pi.Email)
+	Cfg.UserTokens.StorePersonalInfo(un, &pi)
 	http.Redirect(w, r, "home", http.StatusTemporaryRedirect)
-	pollChan <- *ut
+	pollChan <- un
 }
 
 func handleEvent(w http.ResponseWriter, r *http.Request,
