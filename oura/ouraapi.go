@@ -95,19 +95,21 @@ func GetDocByID(cfg *ClientConfig, user string, endpoint string,
 }
 
 func SearchAll(cfg *ClientConfig, name string, sink chan<- Observation) {
-	dr := readinessResponse{}
+	// clunky, but I can't find a way to get around this with generics,
+	// and don't want to get reflect.* involved to save 10 lines.
+	dr := SearchResponse[dailyReadiness]{}
 	err := SearchDocs(cfg, name, "daily_readiness", &dr)
 	process(err, dr.Data, name, sink)
-	da := activityResponse{}
+	da := SearchResponse[dailyActivity]{}
 	err = SearchDocs(cfg, name, "daily_activity", &da)
 	process(err, da.Data, name, sink)
-	ds := sleepResponse{}
+	ds := SearchResponse[dailySleep]{}
 	err = SearchDocs(cfg, name, "daily_sleep", &ds)
 	process(err, ds.Data, name, sink)
-	dp := sleepPeriodResponse{}
+	dp := SearchResponse[sleepPeriod]{}
 	err = SearchDocs(cfg, name, "sleep", &dp)
 	process(err, dp.Data, name, sink)
-	hr := heartrateResponse{}
+	hr := SearchResponse[heartrateInstant]{}
 	err = SearchDocs(cfg, name, "heartrate", &hr)
 	process(err, hr.Data, name, sink)
 	do := SearchResponse[dailySpo2]{}

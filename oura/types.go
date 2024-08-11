@@ -19,9 +19,13 @@ type PersonalInfo struct {
 	Email          string
 }
 
-type readinessResponse struct {
-	Data       []dailyReadiness
-	Next_token string
+// a substructure that appears when they want to give you something in
+// a 1-minly array but only want to include it in a daily document for
+// some reason
+type intervalMetric struct {
+	Interval  float32
+	Items     []float32
+	Timestamp time.Time
 }
 
 type dailyReadiness struct { // implements Doc
@@ -32,20 +36,6 @@ type dailyReadiness struct { // implements Doc
 	Temperature_trend_deviation float32
 	Day                         string
 	Timestamp                   time.Time
-}
-
-type activityResponse struct {
-	Data       []dailyActivity
-	Next_token string
-}
-
-// a substructure that appears repeatedly when they want to give you
-// something in a 1-minly array but only want to include it in a
-// daily document for some reason
-type intervalMetric struct {
-	Interval  float32
-	Items     []float32
-	Timestamp time.Time
 }
 
 type dailyActivity struct {
@@ -84,22 +74,12 @@ type dailyResilience struct {
 	Level        string
 }
 
-type resilienceResponse struct {
-	Data       []dailyResilience
-	Next_token string
-}
-
 type dailySleep struct {
 	ID           string
 	Contributors map[string]int
 	Day          string
 	Score        int
 	Timestamp    time.Time
-}
-
-type sleepResponse struct {
-	Data       []dailySleep
-	Next_token string
 }
 
 type sleepPeriod struct {
@@ -138,20 +118,10 @@ type sleepPeriod struct {
 	Type                    string
 }
 
-type sleepPeriodResponse struct {
-	Data       []sleepPeriod
-	Next_token string
-}
-
 type heartrateInstant struct {
 	Bpm       int
 	Source    string
 	Timestamp time.Time
-}
-
-type heartrateResponse struct {
-	Data       []heartrateInstant
-	Next_token string
 }
 
 // This one contains a pointless nested data structure that forces us
@@ -164,15 +134,12 @@ type dailySpo2 struct {
 	}
 }
 
-// TODO: this is working for daily_spo2, it should be possible to get
-// rid of all the special xyzResponse structs.
 type SearchResponse[D Doc] struct {
 	Data       []D
 	Next_token string
 }
 
 // the "webhook subscription" will send you these in POST requests.
-
 type EventNotification struct {
 	Event_type string
 	Data_type  string
