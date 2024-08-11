@@ -97,6 +97,8 @@ func CreateSubscription(cfg *ClientConfig, data_type string,
 }
 
 func RenewSubscription(cfg *ClientConfig, sub *subResponse) error {
+	// TODO: we don't know if this works until a subscription expires,
+	// which is 3 months in the future.
 	body, err := webhookReq(cfg, "PUT", "renew/"+sub.ID, nil)
 	if err != nil {
 		return err

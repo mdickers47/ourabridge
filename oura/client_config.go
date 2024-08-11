@@ -14,16 +14,15 @@ import (
 )
 
 type ClientConfig struct {
-	MyBaseURL         string
-	ApiBaseURL        string
-	LocalDataLog      string
-	GraphiteServer    string
-	GraphitePrefix    string
-	TimeoutSeconds    int
-	SubscriptionsFile string
-	UserCredsFile     string
-	ListenAddr        string
-	OauthConfig       oauth2.Config
+	MyBaseURL      string
+	ApiBaseURL     string
+	LocalDataLog   string
+	GraphiteServer string
+	GraphitePrefix string
+	TimeoutSeconds int
+	UserCredsFile  string
+	ListenAddr     string
+	OauthConfig    oauth2.Config
 	// {
 	//   RedirectURL  string // ??
 	//   ClientID     string
@@ -66,15 +65,14 @@ func (cfg *ClientConfig) NewContext() (context.Context, context.CancelFunc) {
 
 func LoadClientConfig(fname string) ClientConfig {
 	cc := ClientConfig{
-		MyBaseURL:         "TODO",
-		ApiBaseURL:        "https://api.ouraring.com/v2",
-		LocalDataLog:      "data.txt",
-		GraphiteServer:    "",
-		GraphitePrefix:    "bio.",
-		TimeoutSeconds:    10,
-		SubscriptionsFile: "subscriptions.json",
-		UserCredsFile:     "user_creds.json",
-		ListenAddr:        "127.0.0.1:8000",
+		MyBaseURL:      "TODO",
+		ApiBaseURL:     "https://api.ouraring.com/v2",
+		LocalDataLog:   "data.txt",
+		GraphiteServer: "",
+		GraphitePrefix: "bio.",
+		TimeoutSeconds: 10,
+		UserCredsFile:  "user_creds.json",
+		ListenAddr:     "127.0.0.1:8000",
 		OauthConfig: oauth2.Config{
 			RedirectURL:  "TODO",
 			ClientID:     "TODO",
@@ -95,15 +93,7 @@ func LoadClientConfig(fname string) ClientConfig {
 	}
 	jdump.ParseJsonOrDie(fname, &cc)
 	cc.UserTokens = MakeUserTokenSet(cc.UserCredsFile)
-	cc.Subscriptions = SubscriptionSet{File: cc.SubscriptionsFile}
-	cc.Subscriptions.Subs = make([]subResponse, 0, 8)
-	stat, err = os.Stat(cc.Subscriptions.File)
-	if stat.Size() > 0 && err == nil {
-		jdump.ParseJsonOrDie(cc.Subscriptions.File, &cc.Subscriptions.Subs)
-	} else {
-		log.Printf("warning: subscriptions file %s is missing or empty",
-			cc.Subscriptions.File)
-	}
+	cc.Subscriptions = MakeSubscriptionSet()
 	return cc
 }
 

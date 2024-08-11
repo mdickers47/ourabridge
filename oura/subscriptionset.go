@@ -3,12 +3,9 @@ package oura
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/mdickers47/ourabridge/jdump"
 )
 
 // in only these webhook structures, timestamps are given in a nonstandard
@@ -23,6 +20,9 @@ type subRequest struct {
 	Verification_token string `json:"verification_token"`
 }
 
+// the response object is just different enough from the request
+// object that trying to make them into one struct causes problems.
+
 type subResponse struct {
 	ID                 string    `json:"id"`
 	Callback_url       string    `json:"callback_url"`
@@ -36,7 +36,6 @@ type subResponse struct {
 type SubscriptionSet struct {
 	Subs []subResponse
 	Lock sync.Mutex
-	File string
 }
 
 func (t *weirdTime) UnmarshalJSON(b []byte) error {
@@ -88,7 +87,6 @@ func (s *SubscriptionSet) Replace(sub subResponse) {
 		s.Subs = append(s.Subs[:i], s.Subs[i+1:]...)
 	}
 	s.Subs = append(s.Subs, sub)
-	jdump.DumpJsonOrDie(s.File, s.Subs)
 }
 
 func (s *SubscriptionSet) Delete(sub subResponse) error {
@@ -99,16 +97,11 @@ func (s *SubscriptionSet) Delete(sub subResponse) error {
 		return fmt.Errorf("subscription id=%s not present in set", sub.ID)
 	}
 	s.Subs = append(s.Subs[:i], s.Subs[i+1:]...)
-	jdump.DumpJsonOrDie(s.File, s.Subs)
 	return nil
 }
 
-func LoadSubscriptions(file string) *SubscriptionSet {
-	s := SubscriptionSet{File: file}
+func MakeSubscriptionSet() SubscriptionSet {
+	s := SubscriptionSet{}
 	s.Subs = make([]subResponse, 0, 8)
-	_, err := os.Stat(s.File)
-	if err == nil {
-		jdump.ParseJsonOrDie(s.File, &s.Subs)
-	}
-	return &s
+	return s
 }
