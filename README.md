@@ -85,10 +85,7 @@ The Oura Oauth2 auth server is basically fine.  It works with the
 standard-ish Go library `golang.org/x/oauth2`.  Oura AccessTokens only
 have a lifetime of one day, and you get one shot to use the
 RefreshToken.  The Go library has a problem that makes this a lot more
-difficult, which is that it doesn't give your application any way to
-know about token refreshes:
-
-https://github.com/golang/oauth2/issues/8
+difficult: https://github.com/golang/oauth2/issues/8
 
 The workaround in use here is equivalent to the one by @dnesting.
 
@@ -101,13 +98,13 @@ get the aforementioned complicated workaround to work.
 Most of the available endpoints (which they call "routes") are
 organized around JSON documents that are updated periodically inside
 Oura.  Most likely, they have a mongodb full of these, and batch jobs
-receive raw data from phone apps and recalculate the docs.
+recalculate the docs when there is new raw data from a ring.
 
 For each document type, the route named **Multiple XYZ Documents**
-functions as a search.  You specify a date range and you will get back
-all the documents inside your date range.  The user is implicitly
-identifed by the `Authorization: Bearer` header that you supply.  This
-is either a Personal Access Token or an oauth2 Access Token.
+functions as a search.  You specify a date range and get all the
+documents inside your date range.  The user is implicitly identifed by
+the `Authorization: Bearer` header that you supply.  This is either a
+Personal Access Token or an oauth2 Access Token.
 
 Here is an example response from `daily_readiness`.  It will not be
 pretty-printed; I did that:
@@ -137,10 +134,13 @@ pretty-printed; I did that:
 }
 ```
 
+The `examples/` directory has example responses from most of the
+document routes.
+
 Each document type also has a route named **Single XYZ Document**.
 For this you append a document ID to the URL and receive only that
 document.  This is useless unless you are using webhook notifications,
-because you have no way to find out the document IDs, which are GUIDs.
+because you have no way to find out the document IDs.
 
 ## Webhook/subscription API
 
@@ -159,22 +159,21 @@ parameter.  You prove your worth by taking that string and sending it
 back in a JSON object. (???)  Then the original PUT request, which has
 been hanging until now (????) is supposed to return HTTP 201 (?????).
 
-This is as fragile as it sounds.  One problem is that the thing that
-calls back fails unless your server presents the entire certificate
-chain (i.e. `fullchain.pem` from LetsEncrypt), NOT the certificate
-itself.  Your only clue is that you will get a response to the PUT
-that says "SSLError."  Oura's support people did not know how to solve
-this; a friend eventually guessed the problem.
+This is as fragile as it sounds.  One problem is that the callback
+fails unless your server presents the entire certificate chain
+(i.e. `fullchain.pem` from LetsEncrypt), NOT the certificate itself.
+Your only clue is a PUT response of HTTP 500 with a body of
+"SSLError."  Oura's support people did not know how to solve this; a
+friend eventually guessed the problem.
 
-The next problem is that the callback sequence times out inside Oura a
-lot.  It can be up to a few minutes before you receive the callback.
-But they have a Cloudflare WAF/?????? in front of it, which will time
-out and kill your PUT request after 60 seconds.  So it often happens
-that you run your PUT, wait 60 seconds, get a Cloudflare 504
-boilerplate error, which your JSON parser can't parse by the way, and
-then you'll see the callback run uselessly a few minutes later.  I
-don't think there is any solution other than just try some more times
-and eventually get lucky.
+The next problem is that the callback often times out inside Oura.  It
+can take several minutes before you receive the callback.  But they
+have a Cloudflare WAF/?????? in front of your PUT request, which will
+time out and kill it after 60 seconds.  So it often happens that you
+send a PUT, wait 60 seconds, get a Cloudflare 504 boilerplate error,
+which your JSON parser can't parse by the way, and then you'll see the
+callback run uselessly a few minutes later.  I don't think there is
+any solution other than just try again and eventually get lucky.
 
 If you get this far, you will figure out that the "subscription" is
 associated with your callback URL, a data type
@@ -222,4 +221,4 @@ https://www.reddit.com/r/ouraring/comments/148t9eh/i_made_a_tool_that_pulls_my_d
 It does this with 1/8 the code, because (a) python and (b) it uses the
 Personal Access Token scheme, which is far simpler but only works for
 one person.  If only want to replicate your own data, it will be
-easier and more reliable to use his thing.
+easier and more reliable to use their thing.
