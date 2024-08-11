@@ -163,6 +163,12 @@ func ProcessEvent(cfg *ClientConfig, event EventNotification,
 						i = SendDoc(dr, user, sink)
 					}
 			*/
+		case "daily_stress":
+			ds := dailyStress{}
+			err = GetDocByID(cfg, user, "daily_stress", event.Object_id, &ds)
+			if err == nil {
+				i = SendDoc(ds, user, sink)
+			}
 		default:
 			// unhandled types include:
 			// tag enhanced_tag workout session daily_spo2 sleep_time
@@ -218,7 +224,7 @@ func ValidateSubscriptions(cfg *ClientConfig) {
 	}
 
 	for _, data_type := range []string{"daily_activity", "daily_readiness",
-		"daily_sleep", "sleep", "daily_spo2"} {
+		"daily_sleep", "sleep", "daily_spo2", "daily_stress"} {
 		for _, event_type := range []string{"create", "update"} {
 			_, sub := cfg.Subscriptions.Find(data_type, event_type)
 			if sub == nil {

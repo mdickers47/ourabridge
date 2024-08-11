@@ -7,7 +7,7 @@ import (
 )
 
 type Doc interface {
-	dailyReadiness | dailyActivity | dailySleep | sleepPeriod | heartrateInstant | dailySpo2 | dailyResilience
+	dailyReadiness | dailyActivity | dailySleep | sleepPeriod | heartrateInstant | dailySpo2 | dailyResilience | dailyStress
 	GetTimestamp() time.Time
 	GetMetricPrefix() string
 }
@@ -140,6 +140,14 @@ type dailySpo2 struct {
 	}
 }
 
+type dailyStress struct {
+	ID            string
+	Day           string
+	Stress_high   int
+	Recovery_high int
+	Day_summary   string
+}
+
 type SearchResponse[D Doc] struct {
 	Data       []D
 	Next_token string
@@ -218,6 +226,15 @@ func (dr dailyResilience) GetTimestamp() time.Time {
 
 func (dr dailyResilience) GetMetricPrefix() string {
 	return "resilience"
+}
+
+func (ds dailyStress) GetTimestamp() time.Time {
+	t, _ := time.Parse("2006-01-02", ds.Day)
+	return t
+}
+
+func (ds dailyStress) GetMetricPrefix() string {
+	return "stress"
 }
 
 func (r *resilienceLevel) UnmarshalJSON(b []byte) error {

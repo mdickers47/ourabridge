@@ -94,6 +94,10 @@ The auth server does not appear to care if you issue new tokens to
 yourself dozens of times a day, which is good when you are trying to
 get the aforementioned complicated workaround to work.
 
+There is an undocumented Oauth scope named "stress" that is required
+by the `daily_resilience` routes.  It is *not* required by the
+`daily_stress` endpoint.
+
 ## Polling for documents
 
 Most of the available endpoints (which they call "routes") are
@@ -169,7 +173,7 @@ friend eventually guessed the problem.
 
 The next problem is that the callback often times out inside Oura.  It
 can take several minutes before you receive the callback.  But they
-have a Cloudflare WAF/?????? in front of your PUT request, which will
+have a CloudFront WAF/?????? in front of your PUT request, which will
 time out and kill it after 60 seconds.  So it often happens that you
 send a PUT, wait 60 seconds, get a Cloudflare 504 boilerplate error,
 which your JSON parser can't parse by the way, and then you'll see the

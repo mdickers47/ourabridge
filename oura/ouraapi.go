@@ -118,6 +118,9 @@ func SearchAll(cfg *ClientConfig, name string, sink chan<- Observation) {
 	de := SearchResponse[dailyResilience]{}
 	err = SearchDocs(cfg, name, "daily_resilience", &de)
 	process(err, de.Data, name, sink)
+	dt := SearchResponse[dailyStress]{}
+	err = SearchDocs(cfg, name, "daily_stress", &dt)
+	process(err, dt.Data, name, sink)
 	cfg.UserTokens.Touch(name)
 }
 
