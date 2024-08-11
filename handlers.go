@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"golang.org/x/oauth2"
@@ -145,7 +148,7 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request,
 }
 
 func handleEvent(w http.ResponseWriter, r *http.Request,
-	sink chan<- oura.EventNotification) {
+	sink chan<- oura.EventNotification, client_secret string) {
 	switch r.Method {
 	case "GET":
 		// this is how they verify that you are listening at subscription
@@ -181,7 +184,6 @@ func handleEvent(w http.ResponseWriter, r *http.Request,
 			log.Printf("can't write to output stream: %v", err)
 		}
 	case "POST":
-		event := oura.EventNotification{}
 		buf, err := io.ReadAll(r.Body)
 		if err != nil {
 			msg := fmt.Sprintf("can't read request body: %s", err)
@@ -190,6 +192,31 @@ func handleEvent(w http.ResponseWriter, r *http.Request,
 			writeLogErr(w, msg)
 			return
 		}
+
+		// check signature
+		{
+			mac := hmac.New(sha256.New, []byte(client_secret))
+			mac.Write([]byte(r.Header.Get("x-oura-timestamp")))
+			mac.Write(buf)
+			recv, err := hex.DecodeString(r.Header.Get("x-oura-signature"))
+			if err != nil {
+				writeLogErr(w, fmt.Sprintf("no x-oura-signature header: %s", err))
+				return
+			}
+			if !hmac.Equal(mac.Sum(nil), recv) {
+				// this looks silly, but we are using hmac.Equal because
+				// supposedly there is a risk of side channel timing attacks.
+				writeLogErr(w, fmt.Sprintf(
+					"hmac verification failed: computed %s received %s",
+					hex.EncodeToString(mac.Sum(nil)),
+					r.Header.Get("x-oura-signature")))
+				return
+			} else {
+				log.Printf("good hmac: %s", r.Header.Get("x-oura-signature"))
+			}
+		}
+
+		event := oura.EventNotification{}
 		err = json.Unmarshal(buf, &event)
 		if err != nil {
 			msg := fmt.Sprintf("can't parse request body: %s", err)

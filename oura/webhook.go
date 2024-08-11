@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// unlike the rest of the API, the endpoint /webhook/subscription is
+// unattached to any oauth token.  It uses only your ClientID and
+// ClientSecret, which go in custom headers.  This is your clue that,
+// unlike the rest of the API, subscriptions are only defined by
+// (client, data_type, event_type), and are not associated with any
+// userID.  Oura remembers somewhere what userIDs your client is
+// interested in, and sends notifications for all of them.  You then
+// have to have an oauth token for that userID to retrieve the
+// document.  None of this is written in the documentation.
+
 func webhookReq(cfg *ClientConfig, method string, id string,
 	body []byte) ([]byte, error) {
 	var req *http.Request

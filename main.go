@@ -179,7 +179,7 @@ func main() {
 		handleAuthCode(w, r, pollChan)
 	})
 	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
-		handleEvent(w, r, eventChan)
+		handleEvent(w, r, eventChan, Cfg.OauthConfig.ClientSecret)
 	})
 	srv := startHttp(Cfg.ListenAddr, *mux)
 
