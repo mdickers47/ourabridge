@@ -28,8 +28,8 @@ where:
 
 + `${username}` is what a person selected for themselves when they
   signed up
-+ `${document_type}` is activity, hr, readiness, or sleep (these 4 are
-  what is implemented)
++ `${document_type}` is one of: activity, hr, readiness, sleep,
+  resilience, stress
 + `${metric}` is an element from the given document.  Anything numeric
   that appears in the [Oura v2 API](https://cloud.ouraring.com/v2/docs)
   is mapped.
@@ -38,6 +38,17 @@ The "documents" supplied by the API are basically the same as the
 cards that the phone app shows you, minus the peppy words.  But with
 the numbers stored as timeseries, you can recombine the data in other
 ways and make up whatever weird graphs or visualizations you want.
+
+# Unsupported data types
+
+The following API documents are not replicated:
+
++ `daily_cardiovascular_age`
++ `vO2_max`
++ `workout`
++ `tag` or `enhanced_tag`: Tags can be any random words that the user
+  wants to record with a timestamp, so they can be a privacy concern.
+  Could be implemented with an allow-list of specific tags to record.
 
 # How to run your own
 
@@ -217,9 +228,26 @@ to test the fix.)
 
 ## Oddities and inconsistencies
 
-### timeseries values
+### High-resolution data
 
-TODO
+The API is designed around the idea of JSON documents that update at
+most a few times a day.  There are higher-resolution time series
+awkwardly shoehorned in, using at least three schemes.
+
+There are some "intervalometer" structs that contain a start
+timestamp, an interval, and a list of data points:
+
++ `daily_activity` gives you a MET series
++ `sleep_period` gives you heart_rate and HRV series
+
+The `sleep_period` document also has weird fields named
+`movement_30_sec` and `sleep_phase_5_min`.  They appear to be long
+strings where each byte represents the status for one interval.
+
+Meanwhile the `heartrate` endpoint generates a new document for every
+observation, which can be thousands in a day.
+
+None of this is documented; I am just guessing at the interpretations.
 
 ### daily_spo2
 
