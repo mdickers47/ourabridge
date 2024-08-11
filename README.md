@@ -211,6 +211,27 @@ writing, I don't know if my "renew" process works, because I won't
 find out for 3 months.  (And if it fails, it will be another 3 months
 to test the fix.)
 
+## Oddities and inconsistencies
+
+### daily_spo2
+
+The `daily_spo2` document has two differences from all the others.
+
+```
+  {
+    "id": "345ad0b7-bf23-4e12-8e21-5005f53f8432",
+    "day": "2024-08-09",
+    "spo2_percentage": {
+      "average": 97.804
+    }
+  }
+```
+
+It has no Timestamp, and it contains a pointless nested data
+structure.  The `daily_spo2` search API route also has a different
+behavior, where it sometimes returns content-free documents where the
+`average` member is null.
+
 # Similar projects
 
 A person possibly named Sam Roberts has written a thing in Python that

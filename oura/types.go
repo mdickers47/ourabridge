@@ -5,7 +5,7 @@ import (
 )
 
 type Doc interface {
-	dailyReadiness | dailyActivity | dailySleep | sleepPeriod | heartrateInstant
+	dailyReadiness | dailyActivity | dailySleep | sleepPeriod | heartrateInstant | dailySpo2
 	GetTimestamp() time.Time
 	GetMetricPrefix() string
 }
@@ -77,11 +77,6 @@ type dailyActivity struct {
 	Timestamp                   time.Time
 }
 
-type resilienceResponse struct {
-	Data       []dailyResilience
-	Next_token string
-}
-
 type dailyResilience struct {
 	ID           string
 	Day          string
@@ -89,8 +84,8 @@ type dailyResilience struct {
 	Level        string
 }
 
-type sleepResponse struct {
-	Data       []dailySleep
+type resilienceResponse struct {
+	Data       []dailyResilience
 	Next_token string
 }
 
@@ -102,8 +97,8 @@ type dailySleep struct {
 	Timestamp    time.Time
 }
 
-type sleepPeriodResponse struct {
-	Data       []sleepPeriod
+type sleepResponse struct {
+	Data       []dailySleep
 	Next_token string
 }
 
@@ -143,8 +138,8 @@ type sleepPeriod struct {
 	Type                    string
 }
 
-type heartrateResponse struct {
-	Data       []heartrateInstant
+type sleepPeriodResponse struct {
+	Data       []sleepPeriod
 	Next_token string
 }
 
@@ -152,6 +147,28 @@ type heartrateInstant struct {
 	Bpm       int
 	Source    string
 	Timestamp time.Time
+}
+
+type heartrateResponse struct {
+	Data       []heartrateInstant
+	Next_token string
+}
+
+// This one contains a pointless nested data structure that forces us
+// to treat it as a special case everywhere.
+type dailySpo2 struct {
+	ID              string
+	Day             string
+	Spo2_percentage struct {
+		Average float32
+	}
+}
+
+// TODO: this is working for daily_spo2, it should be possible to get
+// rid of all the special xyzResponse structs.
+type SearchResponse[D Doc] struct {
+	Data       []D
+	Next_token string
 }
 
 // the "webhook subscription" will send you these in POST requests.
@@ -208,4 +225,16 @@ func (hr heartrateInstant) GetTimestamp() time.Time {
 
 func (hr heartrateInstant) GetMetricPrefix() string {
 	return "hr"
+}
+
+func (ds dailySpo2) GetTimestamp() time.Time {
+	// inexplicably, this one document lacks Timestamp and has only Day.
+	// So you're getting the time.Time zero value if the parsing fails,
+	// sorry.
+	t, _ := time.Parse("2006-01-02", ds.Day)
+	return t
+}
+
+func (ds dailySpo2) GetMetricPrefix() string {
+	return "spo2"
 }

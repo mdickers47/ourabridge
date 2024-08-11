@@ -58,7 +58,8 @@ func process[T Doc](err error, doclist []T, name string,
 	return sent_count
 }
 
-func doGet(cfg *ClientConfig, user string, ouraurl string, pDest any) error {
+func doGet(cfg *ClientConfig, user string, ouraurl string,
+	pDest any) error {
 
 	client, cancel := cfg.OauthClient(user)
 	defer cancel()
@@ -109,6 +110,9 @@ func SearchAll(cfg *ClientConfig, name string, sink chan<- Observation) {
 	hr := heartrateResponse{}
 	err = SearchDocs(cfg, name, "heartrate", &hr)
 	process(err, hr.Data, name, sink)
+	do := SearchResponse[dailySpo2]{}
+	err = SearchDocs(cfg, name, "daily_spo2", &do)
+	process(err, do.Data, name, sink)
 	cfg.UserTokens.Touch(name)
 }
 
@@ -138,7 +142,12 @@ func RandomString() string {
 	return base64.URLEncoding.EncodeToString(nonce)
 }
 
-/* oh god we have a function that uses generics and reflection */
+// oh god, generics and reflection, how did this get here, i am not
+// good at computer
+//
+// This somehow compiles.  It will take any Doc, find all of its
+// members that have type {int,float32,intervalMetric}, turn them into
+// Observations, and send those down the sink channel.
 
 func SendDoc[T Doc](doc T, username string, sink chan<- Observation) int {
 	sent_count := 0
@@ -156,51 +165,61 @@ func SendDoc[T Doc](doc T, username string, sink chan<- Observation) int {
 	}
 	s := reflect.ValueOf(&doc).Elem()
 	typeOfDoc := s.Type()
-	for i := 0; i < s.NumField(); i++ {
-		f := s.Field(i)
-		metric_name := strings.ToLower(typeOfDoc.Field(i).Name)
-		// some types that we can always handle the same way
-		switch f.Type().Name() {
-		case "int":
-			send(metric_name, float32(f.Interface().(int)))
-		case "float32":
-			send(metric_name, f.Interface().(float32))
-		case "intervalMetric":
-			im := f.Interface().(intervalMetric)
-			for i, v := range im.Items {
-				t := im.Timestamp.Add(
-					time.Duration(float32(i)*im.Interval) * time.Second)
-				// these timeseries contain 'null' which go parses as 0; luckily it
-				// will never be a valid heart_rate or hrv or met
-				if v > 0.0 {
-					send_ts(metric_name, v, t)
+	switch reflect.TypeOf(&doc) {
+	case reflect.TypeOf((*dailySpo2)(nil)):
+		// one of these things is not like the others
+		// one of these things just doesn't belong
+		ds := s.Interface().(dailySpo2)
+		send("daily_average", ds.Spo2_percentage.Average)
+	default:
+		// the default process is to find all members of doc that have type
+		// {int, float32, intervalMetric} and translate them into metrics
+		// of the same (lowercased) name.
+		for i := 0; i < s.NumField(); i++ {
+			f := s.Field(i)
+			metric_name := strings.ToLower(typeOfDoc.Field(i).Name)
+			// some types that we can always handle the same way
+			switch f.Type().Name() {
+			case "int":
+				send(metric_name, float32(f.Interface().(int)))
+			case "float32":
+				send(metric_name, f.Interface().(float32))
+			case "intervalMetric":
+				im := f.Interface().(intervalMetric)
+				for i, v := range im.Items {
+					t := im.Timestamp.Add(
+						time.Duration(float32(i)*im.Interval) * time.Second)
+					// these timeseries contain 'null' which go parses as 0; luckily it
+					// will never be a valid heart_rate or hrv or met
+					if v > 0.0 {
+						send_ts(metric_name, v, t)
+					}
+				}
+			}
+			// special oddball metrics in the default document types
+			switch metric_name {
+			case "contributors":
+				for k, v := range f.Interface().(map[string]int) {
+					send(fmt.Sprintf("contrib.%s", strings.ToLower(k)), float32(v))
+				}
+			case "movement_30_sec":
+				s := f.Interface().(string)
+				// GetTimestamp() returns bedtime_end on sleepPeriod, but we can find
+				// bedtime_start anyway
+				t0 := doc.GetTimestamp().Add(time.Duration(-30*len(s)) * time.Second)
+				for i := 0; i < len(s); i++ {
+					send_ts(metric_name, float32(s[i]-48),
+						t0.Add(time.Duration(30*i)*time.Second))
+				}
+			case "sleep_phase_5_min":
+				s := f.Interface().(string)
+				t0 := doc.GetTimestamp().Add(time.Duration(-300*len(s)) * time.Second)
+				for i := 0; i < len(s); i++ {
+					send_ts(metric_name, float32(s[i]-48),
+						t0.Add(time.Duration(300*i)*time.Second))
 				}
 			}
 		}
-		// special oddball cases
-		switch metric_name {
-		case "contributors":
-			for k, v := range f.Interface().(map[string]int) {
-				send(fmt.Sprintf("contrib.%s", strings.ToLower(k)), float32(v))
-			}
-		case "movement_30_sec":
-			s := f.Interface().(string)
-			// GetTimestamp() returns bedtime_end on sleepPeriod, but we can find
-			// bedtime_start anyway
-			t0 := doc.GetTimestamp().Add(time.Duration(-30*len(s)) * time.Second)
-			for i := 0; i < len(s); i++ {
-				send_ts(metric_name, float32(s[i]-48),
-					t0.Add(time.Duration(30*i)*time.Second))
-			}
-		case "sleep_phase_5_min":
-			s := f.Interface().(string)
-			t0 := doc.GetTimestamp().Add(time.Duration(-300*len(s)) * time.Second)
-			for i := 0; i < len(s); i++ {
-				send_ts(metric_name, float32(s[i]-48),
-					t0.Add(time.Duration(300*i)*time.Second))
-			}
-		}
-
 	}
 	return sent_count
 }

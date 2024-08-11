@@ -147,6 +147,12 @@ func ProcessEvent(cfg *ClientConfig, event EventNotification,
 			if err == nil {
 				i = SendDoc(sp, user, sink)
 			}
+		case "daily_spo2":
+			ds := dailySpo2{}
+			err = GetDocByID(cfg, user, "daily_spo2", event.Object_id, &ds)
+			if err == nil {
+				i = SendDoc(ds, user, sink)
+			}
 		default:
 			// unhandled types include:
 			// tag enhanced_tag workout session daily_spo2 sleep_time
@@ -174,28 +180,6 @@ func ValidateSubscriptions(cfg *ClientConfig) {
 	for _, sr := range getSubscriptions(cfg) {
 		sr.mark = true
 		cfg.Subscriptions.Replace(sr)
-		/*
-			found := false
-			for _, sub := range cfg.Subscriptions.Subs {
-				if sub.ID == sr.ID {
-					// we actually did know about this subscription, lucky day.
-					// we save the new copy oura gave us, in case Expiration_time
-					// has changed or something.
-					sr.mark = true
-					cfg.Subscriptions.Replace(sr)
-					found = true
-				}
-			}
-			if !found {
-				// we don't know what the parameters of this subscription are,
-				// because we lost them and they are not included in "List
-				// Webhook Subscriptions."  all we can do is delete it.
-				log.Printf("deleting subscription %s", sr.ID)
-				if _, err := webhookReq(cfg, "DELETE", sr.ID, nil); err != nil {
-					log.Printf("failed to delete mystery subscription: %s", err)
-				}
-			}
-		*/
 	}
 
 	// delete our memory of any subscription that oura does not know about
@@ -224,7 +208,7 @@ func ValidateSubscriptions(cfg *ClientConfig) {
 	}
 
 	for _, data_type := range []string{"daily_activity", "daily_readiness",
-		"daily_sleep", "sleep"} {
+		"daily_sleep", "sleep", "daily_spo2"} {
 		for _, event_type := range []string{"create", "update"} {
 			_, sub := cfg.Subscriptions.Find(data_type, event_type)
 			if sub == nil {
