@@ -153,6 +153,16 @@ func ProcessEvent(cfg *ClientConfig, event EventNotification,
 			if err == nil {
 				i = SendDoc(ds, user, sink)
 			}
+			// there is no such thing as daily_resilience subscription as of
+			// 2024-08-11.
+			/*
+				case "daily_resilience":
+					dr := dailyResilience{}
+					err = GetDocByID(cfg, user, "daily_resilience", event.Object_id, &dr)
+					if err == nil {
+						i = SendDoc(dr, user, sink)
+					}
+			*/
 		default:
 			// unhandled types include:
 			// tag enhanced_tag workout session daily_spo2 sleep_time

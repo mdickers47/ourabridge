@@ -78,7 +78,7 @@ func LoadClientConfig(fname string) ClientConfig {
 			ClientID:     "TODO",
 			ClientSecret: "TODO",
 			Scopes: []string{"email", "personal", "daily", "heartrate",
-				"workout", "spo2"},
+				"workout", "spo2", "stress"},
 			Endpoint: oauth2.Endpoint{
 				AuthURL:       "https://cloud.ouraring.com/oauth/authorize",
 				DeviceAuthURL: "unused",

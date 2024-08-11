@@ -213,6 +213,10 @@ to test the fix.)
 
 ## Oddities and inconsistencies
 
+### timeseries values
+
+TODO
+
 ### daily_spo2
 
 The `daily_spo2` document has two differences from all the others.
@@ -231,6 +235,54 @@ It has no Timestamp, and it contains a pointless nested data
 structure.  The `daily_spo2` search API route also has a different
 behavior, where it sometimes returns content-free documents where the
 `average` member is null.
+
+### daily_resilience
+
+The `daily_resilience` route has four differences from all the others.
+
+Other daily documents contain a numeric `score`, but this one is named
+`level` and it is a string such as "adequate".  I translate them to
+{1,2,3,4,5}.
+
+The `daily_resilience` doc has a map named `contributors`, but unlike
+all the others, these are floats.  You cannot discover this from the
+documentation because it uses 0 as the example values.
+
+The resilience routes require an undocumented oauth scope named
+"stress".  At least the error message tells you about it:
+
+```
+HTTP 401
+
+{"detail":"Token is not authorized access stress scope."}
+```
+
+Finally, there is no subscription for `daily_resilience`
+notifications.  If you try to create one, it will say:
+
+```
+HTTP 422 Unprocessable Entity
+
+{
+  "detail": [
+    {
+      "type": "enum",
+      "loc": [
+        "body",
+        "data_type"
+      ],
+      "msg": "Input should be 'tag', 'enhanced_tag', 'workout', 'session', 'sleep', 'daily_sleep', 'daily_readiness', 'daily_activity', 'daily_spo2', 'sleep_time', 'rest_mode_period', 'ring_configuration', 'daily_stress' or 'daily_cycle_phases'",
+      "input": "daily_resilience",
+      "ctx": {
+        "expected": "'tag', 'enhanced_tag', 'workout', 'session', 'sleep', 'daily_sleep', 'daily_readiness', 'daily_activity', 'daily_spo2', 'sleep_time', 'rest_mode_period', 'ring_configuration', 'daily_stress' or 'daily_cycle_phases'"
+      },
+      "url": "https://errors.pydantic.dev/2.7/v/enum"
+    }
+  ]
+}
+```
+
+I guess you can only poll for this document type.
 
 # Similar projects
 

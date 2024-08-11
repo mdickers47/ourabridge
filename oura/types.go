@@ -1,11 +1,13 @@
 package oura
 
 import (
+	"fmt"
+	"strings"
 	"time"
 )
 
 type Doc interface {
-	dailyReadiness | dailyActivity | dailySleep | sleepPeriod | heartrateInstant | dailySpo2
+	dailyReadiness | dailyActivity | dailySleep | sleepPeriod | heartrateInstant | dailySpo2 | dailyResilience
 	GetTimestamp() time.Time
 	GetMetricPrefix() string
 }
@@ -67,11 +69,15 @@ type dailyActivity struct {
 	Timestamp                   time.Time
 }
 
+// this comes as a string, we want an int, so we need custom Marshal
+// and Unmarshal handlers
+type resilienceLevel int
+
 type dailyResilience struct {
 	ID           string
 	Day          string
-	Contributors map[string]int
-	Level        string
+	Contributors map[string]float32 // watch out, this is unlike the others
+	Level        resilienceLevel
 }
 
 type dailySleep struct {
@@ -195,13 +201,54 @@ func (hr heartrateInstant) GetMetricPrefix() string {
 }
 
 func (ds dailySpo2) GetTimestamp() time.Time {
-	// inexplicably, this one document lacks Timestamp and has only Day.
-	// So you're getting the time.Time zero value if the parsing fails,
-	// sorry.
+	// this document lacks Timestamp and has only Day.  So you're
+	// getting the time.Time zero value if the parsing fails, sorry.
 	t, _ := time.Parse("2006-01-02", ds.Day)
 	return t
 }
 
 func (ds dailySpo2) GetMetricPrefix() string {
 	return "spo2"
+}
+
+func (dr dailyResilience) GetTimestamp() time.Time {
+	t, _ := time.Parse("2006-01-02", dr.Day)
+	return t
+}
+
+func (dr dailyResilience) GetMetricPrefix() string {
+	return "resilience"
+}
+
+func (r *resilienceLevel) UnmarshalJSON(b []byte) error {
+	levels := map[string]resilienceLevel{
+		"limited":     1,
+		"adequate":    2,
+		"solid":       3, // I am assuming the words above "adequate" look like this
+		"strong":      4, // because I have never seen them lol
+		"exceptional": 5,
+	}
+	s := strings.Trim(string(b), "\"")
+	i, ok := levels[s]
+	if !ok {
+		*r = -1
+		return fmt.Errorf("unknown resilience level %s", s)
+	}
+	*r = i
+	return nil
+}
+
+func (r resilienceLevel) MarshalJSON() ([]byte, error) {
+	levels := map[resilienceLevel]string{
+		1: "limited",
+		2: "adequate",
+		3: "solid",
+		4: "strong",
+		5: "exceptional",
+	}
+	s, ok := levels[r]
+	if !ok {
+		return nil, fmt.Errorf("unknown resilience level %d", r)
+	}
+	return []byte(s), nil
 }

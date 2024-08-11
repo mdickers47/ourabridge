@@ -115,6 +115,9 @@ func SearchAll(cfg *ClientConfig, name string, sink chan<- Observation) {
 	do := SearchResponse[dailySpo2]{}
 	err = SearchDocs(cfg, name, "daily_spo2", &do)
 	process(err, do.Data, name, sink)
+	de := SearchResponse[dailyResilience]{}
+	err = SearchDocs(cfg, name, "daily_resilience", &de)
+	process(err, de.Data, name, sink)
 	cfg.UserTokens.Touch(name)
 }
 
@@ -169,10 +172,16 @@ func SendDoc[T Doc](doc T, username string, sink chan<- Observation) int {
 	typeOfDoc := s.Type()
 	switch reflect.TypeOf(&doc) {
 	case reflect.TypeOf((*dailySpo2)(nil)):
-		// one of these things is not like the others
-		// one of these things just doesn't belong
 		ds := s.Interface().(dailySpo2)
 		send("daily_average", ds.Spo2_percentage.Average)
+	case reflect.TypeOf((*dailyResilience)(nil)):
+		// this one can almost get through the default handler, BUT the
+		// contributors map has float values this time.
+		dr := s.Interface().(dailyResilience)
+		send("level", float32(int(dr.Level)))
+		for k, v := range dr.Contributors {
+			send(fmt.Sprintf("contrib.%s", strings.ToLower(k)), v)
+		}
 	default:
 		// the default process is to find all members of doc that have type
 		// {int, float32, intervalMetric} and translate them into metrics
