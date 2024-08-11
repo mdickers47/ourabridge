@@ -13,6 +13,7 @@ It uses the Oauth client API, which is good and bad:
 + It has to be somewhere that is online and reachable all the time,
   because that is how oauth and the webhook subscriptions work.
   That's bad.
++ Can I go now?
 
 See "Similar Projects" below for a simpler program that works for one
 person.
