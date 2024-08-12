@@ -211,8 +211,6 @@ func handleEvent(w http.ResponseWriter, r *http.Request,
 					hex.EncodeToString(mac.Sum(nil)),
 					r.Header.Get("x-oura-signature")))
 				return
-			} else {
-				log.Printf("good hmac: %s", r.Header.Get("x-oura-signature"))
 			}
 		}
 
