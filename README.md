@@ -318,6 +318,8 @@ I guess you can only poll for this document type.
 
 # Similar projects
 
+## oura-data-visualizer
+
 A person possibly named Sam Roberts has written a thing in Python that
 saves to a postgres database:
 
@@ -328,3 +330,10 @@ It does this with 1/8 the code, because (a) python and (b) it uses the
 Personal Access Token scheme, which is far simpler but only works for
 one person.  If only want to replicate your own data, it will be
 easier and more reliable to use their thing.
+
+## oura-fresh
+
+This is a dashboard for sleep and readiness written for a Javascript
+runtime:
+
+https://pinta.land/posts/oura-fresh/
